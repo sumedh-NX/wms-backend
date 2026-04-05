@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate": "node-pg-migrate up -c src/config/db.js"
+    "migrate": "npx node-pg-migrate up -c src/config/db.js"
   },
   "repository": {
     "type": "git",
