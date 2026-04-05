@@ -4,10 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
-    "migrate": "npx node-pg-migrate up -c src/config/db.js"
-  },
+  "dev": "nodemon src/index.js",
+  "start": "node src/index.js",
+  "postinstall": "chmod +x node_modules/.bin/node-pg-migrate",
+  "migrate": "npx node-pg-migrate up -c src/config/db.js"
+}
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sumedh-NX/wms-backend.git"
