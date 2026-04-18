@@ -3,8 +3,6 @@
 /**
  * Normalizes product codes for comparison.
  * Removes hyphens, removes 'M', converts to uppercase and trims.
- * Example: "18213-74T10" -> "1821374T10"
- * Example: "09482M00651" -> "0948200651"
  */
 function normalizeCode(code) {
   if (!code) return '';
@@ -15,45 +13,76 @@ function normalizeCode(code) {
     .trim();
 }
 
+/**
+ * Normalizes various date formats to YYYY-MM-DD for database comparison.
+ * Handles: "26/03/2026 07:30 PM", "26/03/26", "2026-03-26"
+ */
+function normalizeDate(dateStr) {
+  if (!dateStr) return '';
+  
+  // Remove time part (everything after the first space)
+  const dateOnly = String(dateStr).split(' ')[0].trim(); 
+  
+  // Case 1: DD/MM/YYYY or DD/MM/YY
+  const dmyMatch = dateOnly.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (dmyMatch) {
+    let day = dmyMatch[1].padStart(2, '0');
+    let month = dmyMatch[2].padStart(2, '0');
+    let year = dmyMatch[3];
+    
+    // Handle 2-digit year (e.g., "26" -> "2026")
+    if (year.length === 2) year = '20' + year;
+    
+    return `${year}-${month}-${day}`; // Returns YYYY-MM-DD
+  }
+  
+  // Case 2: Already in YYYY-MM-DD format
+  return dateOnly;
+}
+
 function parseBinQR(raw) {
   try {
     const t = raw.trim();
 
+    // 1. Bin Number - always 13 digits at the start
     const binMatch = t.match(/^(\d{13})/);
+    // 2. Product Code - alphanumeric 8-15 chars after 2+ spaces
     const codeMatch = t.match(/\s{2,}([A-Z0-9]{8,15})\s/i);
+    // 3. Case Pack - digits (2-4) after the product code block
     const cpMatch = t.match(/\s([A-Z0-9]{8,15})\s+(\d{2,4})\s/i);
+    // 4. Product Name - between case pack and repeated bin number
     const nameMatch = t.match(/\s\d{2,4}\s{2,}([A-Z0-9,\/\s]+?)\d{13}/i);
-    
-    // IMPROVED: Strict anchoring to the date-invoice-qty block
-    // This handles "03/04/2692600165960N" perfectly
-    const dateBlock = t.match(/(\d{2}\/\d{2}\/\d{2})\s*(\d{8})\s*(\d{2,4})\s*N/);
-    
+    // 5+6+7. Date Block - SchedDate + Invoice + SupplyQty (Anchored to 'N')
+    const dateBlock = t.match(/(\d{2}\/\d{2}\/\d{2,4})\s*(\d{8})\s*(\d{2,4})\s*N/);
+    // 8. Vendor Code - N + 3 digits
     const vcMatch = t.match(/N(\d{3})/);
+    // 9. Schedule Number - alphanumeric after vendor code
     const snMatch = t.match(/N\d{3}\s*([0-9A-Z]{10,20})\s*(?=[A-Z]{2}-)/i);
+    // 10. Unload Location - 2 caps + dash + digits
     const ulMatch = t.match(/([A-Z]{2}-\d+)/i);
+    // 11. Supply Date - dd/mm/yyyy HH:MM with optional AM/PM
     const sdMatch = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?:\s*[AP]M)?)/i);
 
     if (!binMatch || !codeMatch || !cpMatch) {
-      throw new Error('Cannot parse Bin Label QR. Check format.');
+      throw new Error('Cannot parse Bin Label QR. Check format or use Manual input.');
     }
 
     const parsedCasePack = parseInt(cpMatch[2], 10);
-    if (isNaN(parsedCasePack) || parsedCasePack <= 0) {
-      throw new Error(`Invalid Case Pack: ${cpMatch[2]}`);
+    if (!parsedCasePack || parsedCasePack <= 0) {
+      throw new Error(`Case Pack read as ${cpMatch[2]} — invalid. Check QR label.`);
     }
 
     if (!dateBlock) {
-      throw new Error('Supply Quantity block not found. Rescan.');
+      throw new Error('Supply Quantity block not found. Rescan slowly and steadily.');
     }
 
     const parsedSupplyQty = parseInt(dateBlock[3], 10);
-    if (isNaN(parsedSupplyQty) || parsedSupplyQty <= 0) {
-      throw new Error(`Invalid Supply Qty: ${dateBlock[3]}`);
+    if (!parsedSupplyQty || parsedSupplyQty <= 0) {
+      throw new Error(`Supply Qty read as ${dateBlock[3]} — invalid. Rescan.`);
     }
 
-    // STRICT MATH: Must be a whole number
     if (parsedSupplyQty % parsedCasePack !== 0) {
-      throw new Error(`Supply Qty (${parsedSupplyQty}) must be divisible by Case Pack (${parsedCasePack}).`);
+      throw new Error(`Supply Qty (${parsedSupplyQty}) ÷ Case Pack (${parsedCasePack}) = ${(parsedSupplyQty / parsedCasePack).toFixed(3)} bins — not a whole number.`);
     }
 
     return {
@@ -71,16 +100,13 @@ function parseBinQR(raw) {
       raw: raw
     };
   } catch (e) {
-    throw e;
+    throw e; 
   }
 }
-
 
 function parsePickQR(raw) {
   try {
     const t = raw.trim();
-
-    // Pick Code - G followed by digits (underscore not required)
     const pickMatch = t.match(/^(G\d+)/);
     const tokens = t.split(/\s+/).filter(s => s.length > 0);
 
@@ -88,7 +114,6 @@ function parsePickQR(raw) {
     for (let i = 1; i < tokens.length; i++) {
       const token = tokens[i];
       const noHyphen = token.replace(/-/g, '');
-      // Must be alphanumeric 8-16 chars, and contain BOTH letters and digits
       if (/^[A-Z0-9-]{8,16}$/i.test(token) && /[A-Z]/i.test(noHyphen) && /[0-9]/.test(noHyphen)) {
         productCode = token;
         break;
@@ -96,8 +121,7 @@ function parsePickQR(raw) {
     }
 
     if (!pickMatch || !productCode) {
-      const debug = `PickCode: ${pickMatch ? pickMatch[1] : 'NOT FOUND'} | Code: ${productCode || 'NOT FOUND'}`;
-      throw new Error(`Picklist QR parse error: ${debug}`);
+      throw new Error(`Picklist QR parse error: PickCode or ProductCode not found.`);
     }
 
     return {
@@ -114,4 +138,5 @@ module.exports = {
   parseBinQR,
   parsePickQR,
   normalizeCode,
+  normalizeDate,
 };
