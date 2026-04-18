@@ -6,6 +6,7 @@ const customerRoutes = require('./routes/customers');
 const dispatchRoutes = require('./routes/dispatch');
 const adminRoutes = require('./routes/admin');
 const { errorHandler } = require('./middleware/error');
+const setupRoutes = require('./routes/setup');
 
 const app = express();
 
@@ -14,7 +15,7 @@ app.use(express.json());
 
 // Public routes
 app.use('/api/auth', authRoutes);
-
+app.use('/api/setup', setupRoutes); 
 // Protected routes – JWT middleware
 const { verifyToken } = require('./middleware/auth');
 app.use('/api', verifyToken);
