@@ -3,7 +3,8 @@ const router = express.Router();
 const db = require('../config/db');
 const { permit } = require('../middleware/auth');
 
-const { parseBinQR, parsePickQR } = require('../utils/qrParser');
+// Added normalizeDate to the imports to fix the "date out of range" error
+const { parseBinQR, parsePickQR, normalizeDate } = require('../utils/qrParser');
 const { runStrategy } = require('../utils/strategyEngine');
 const { logAudit } = require('../utils/auditLogger');
 
@@ -96,18 +97,9 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
 
     const isFirstBin = !dispatch.ref_product_code;
     if (isFirstBin) {
-      // DEFENSIVE CHECK: Ensure we have numbers before dividing
-      if (parsed.supplyQty === undefined || parsed.casePack === undefined) {
-        return res.status(400).json({ message: 'Unable to calculate total bins: Missing quantity or case pack.' });
-      }
-
+      // Calculate total bins based on SupplyQty / CasePack
       const totalBins = Math.ceil(parsed.supplyQty / parsed.casePack);
-
-      // Final check: If totalBins is NaN, stop immediately
-      if (isNaN(totalBins)) {
-        return res.status(400).json({ message: 'Calculation Error: Total bins resulted in NaN.' });
-      }
-
+      
       await db.query(
         `UPDATE dispatches SET
            ref_product_code=$1,
@@ -122,7 +114,7 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
         [
           parsed.productCode,
           parsed.casePack,
-          parsed.supplyDate,
+          normalizeDate(parsed.supplyDate), // <--- FIXED: Converts "26/03/2026" to "2026-03-26"
           parsed.scheduleSentDate,
           parsed.scheduleNumber,
           parsed.supplyQty,
@@ -131,7 +123,6 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
         ]
       );
     }
-
 
     const validationResult = runStrategy(dispatch, parsed, 'BIN_LABEL');
     if (!validationResult.ok) {
@@ -163,7 +154,7 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
         parsed.casePack,
         parsed.scheduleSentDate,
         parsed.scheduleNumber,
-        parsed.supplyQuantity,
+        parsed.supplyQty,
         parsed.supplyDate,
         parsed.vendorCode,
         parsed.invoiceNumber,
@@ -188,7 +179,7 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
       raw_qr: rawQr,
     });
 
-    // FIX: Return the FULL updated dispatch row so the UI updates Product, Case Pack, and Total Bins
+    // Return the FULL updated dispatch row so the UI updates Product, Case Pack, and Total Bins instantly
     const { rows: finalDispatch } = await db.query(
       `SELECT * FROM dispatches WHERE id=$1`,
       [dispatchId]
@@ -266,7 +257,7 @@ router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (re
       raw_qr: rawQr,
     });
 
-    // FIX: Return the FULL updated dispatch row so the UI updates Bin Qty and Progress
+    // Return the FULL updated dispatch row so the UI updates Bin Qty and Progress
     const { rows: finalDispatch } = await db.query(
       `SELECT * FROM dispatches WHERE id=$1`,
       [dispatchId]
