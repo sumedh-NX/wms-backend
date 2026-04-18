@@ -8,6 +8,32 @@ const { runStrategy } = require('../utils/strategyEngine');
 const { logAudit } = require('../utils/auditLogger');
 
 // ---------------------------------------------------------------
+// GET /api/dispatch?customerId=X  -- List all dispatches for a customer
+// ---------------------------------------------------------------
+router.get('/', permit('operator','supervisor','admin'), async (req, res, next) => {
+  try {
+    const { customerId } = req.query;
+    
+    if (!customerId) {
+      return res.status(400).json({ message: 'customerId query parameter is required' });
+    }
+
+    const { rows } = await db.query(
+      `SELECT id, dispatch_number, status, created_at 
+       FROM dispatches 
+       WHERE customer_id = $1 
+       ORDER BY created_at DESC`,
+      [customerId]
+    );
+    
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+// ---------------------------------------------------------------
 // CREATE NEW DISPATCH
 // POST /api/dispatch   { customerId }
 router.post('/', permit('operator','supervisor','admin'), async (req, res, next) => {
