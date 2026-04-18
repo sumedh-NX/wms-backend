@@ -83,7 +83,7 @@ router.get('/:id', permit('operator','supervisor','admin'), async (req, res, nex
 // ---------------------------------------------------------------
 // SCAN BIN QR
 // POST /api/dispatch/:id/scan-bin   { rawQr }
-router.post('/:id/scan-bin', permit('operator','supervisor'), async (req, res, next) => {
+router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
@@ -211,7 +211,7 @@ router.post('/:id/scan-bin', permit('operator','supervisor'), async (req, res, n
 // ---------------------------------------------------------------
 // SCAN PICK‑LIST QR
 // POST /api/dispatch/:id/scan-pick   { rawQr }
-router.post('/:id/scan-pick', permit('operator','supervisor'), async (req, res, next) => {
+router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
