@@ -19,47 +19,41 @@ function parseBinQR(raw) {
   try {
     const t = raw.trim();
 
-    // 1. Bin Number - always 13 digits at the start
     const binMatch = t.match(/^(\d{13})/);
-    // 2. Product Code - alphanumeric 8-15 chars after 2+ spaces
     const codeMatch = t.match(/\s{2,}([A-Z0-9]{8,15})\s/i);
-    // 3. Case Pack - digits (2-4) after the product code block
     const cpMatch = t.match(/\s([A-Z0-9]{8,15})\s+(\d{2,4})\s/i);
-    // 4. Product Name - between case pack and repeated bin number
     const nameMatch = t.match(/\s\d{2,4}\s{2,}([A-Z0-9,\/\s]+?)\d{13}/i);
-    // 5+6+7. Date Block - SchedDate + Invoice + SupplyQty (Anchored to 'N')
+    
+    // IMPROVED: Strict anchoring to the date-invoice-qty block
+    // This handles "03/04/2692600165960N" perfectly
     const dateBlock = t.match(/(\d{2}\/\d{2}\/\d{2})\s*(\d{8})\s*(\d{2,4})\s*N/);
-    // 8. Vendor Code - N + 3 digits
+    
     const vcMatch = t.match(/N(\d{3})/);
-    // 9. Schedule Number - alphanumeric after vendor code, before Unload LOC
     const snMatch = t.match(/N\d{3}\s*([0-9A-Z]{10,20})\s*(?=[A-Z]{2}-)/i);
-    // 10. Unload Location - 2 caps + dash + digits
     const ulMatch = t.match(/([A-Z]{2}-\d+)/i);
-    // 11. Supply Date - dd/mm/yyyy HH:MM with optional AM/PM
     const sdMatch = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}(?:\s*[AP]M)?)/i);
 
-    // --- VALIDATION RULES (from Master Reference) ---
     if (!binMatch || !codeMatch || !cpMatch) {
-      throw new Error('Cannot parse Bin Label QR. Check format or use Manual input.');
+      throw new Error('Cannot parse Bin Label QR. Check format.');
     }
 
-    const parsedCasePack = Number(cpMatch[2]);
-    if (!parsedCasePack || parsedCasePack <= 0) {
-      throw new Error(`Case Pack read as ${cpMatch[2]} — invalid. Check QR label.`);
+    const parsedCasePack = parseInt(cpMatch[2], 10);
+    if (isNaN(parsedCasePack) || parsedCasePack <= 0) {
+      throw new Error(`Invalid Case Pack: ${cpMatch[2]}`);
     }
 
     if (!dateBlock) {
-      throw new Error('Supply Quantity block not found. Rescan slowly and steadily.');
+      throw new Error('Supply Quantity block not found. Rescan.');
     }
 
-    const parsedSupplyQty = Number(dateBlock[3]);
-    if (!parsedSupplyQty || parsedSupplyQty <= 0) {
-      throw new Error(`Supply Qty read as ${dateBlock[3]} — invalid. Rescan.`);
+    const parsedSupplyQty = parseInt(dateBlock[3], 10);
+    if (isNaN(parsedSupplyQty) || parsedSupplyQty <= 0) {
+      throw new Error(`Invalid Supply Qty: ${dateBlock[3]}`);
     }
 
-    // STRICT MATH: SupplyQty MUST divide evenly by CasePack
+    // STRICT MATH: Must be a whole number
     if (parsedSupplyQty % parsedCasePack !== 0) {
-      throw new Error(`Supply Qty (${parsedSupplyQty}) ÷ Case Pack (${parsedCasePack}) = ${(parsedSupplyQty / parsedCasePack).toFixed(3)} bins — not a whole number. Verify the bin label.`);
+      throw new Error(`Supply Qty (${parsedSupplyQty}) must be divisible by Case Pack (${parsedCasePack}).`);
     }
 
     return {
@@ -77,10 +71,10 @@ function parseBinQR(raw) {
       raw: raw
     };
   } catch (e) {
-    // Pass the specific error message to the frontend
-    throw e; 
+    throw e;
   }
 }
+
 
 function parsePickQR(raw) {
   try {

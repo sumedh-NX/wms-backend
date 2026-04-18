@@ -96,7 +96,18 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
 
     const isFirstBin = !dispatch.ref_product_code;
     if (isFirstBin) {
-      const totalBins = Math.ceil(parsed.supplyQuantity / parsed.casePack);
+      // DEFENSIVE CHECK: Ensure we have numbers before dividing
+      if (parsed.supplyQty === undefined || parsed.casePack === undefined) {
+        return res.status(400).json({ message: 'Unable to calculate total bins: Missing quantity or case pack.' });
+      }
+
+      const totalBins = Math.ceil(parsed.supplyQty / parsed.casePack);
+
+      // Final check: If totalBins is NaN, stop immediately
+      if (isNaN(totalBins)) {
+        return res.status(400).json({ message: 'Calculation Error: Total bins resulted in NaN.' });
+      }
+
       await db.query(
         `UPDATE dispatches SET
            ref_product_code=$1,
@@ -114,12 +125,13 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
           parsed.supplyDate,
           parsed.scheduleSentDate,
           parsed.scheduleNumber,
-          parsed.supplyQuantity,
+          parsed.supplyQty,
           totalBins,
           dispatchId,
         ]
       );
     }
+
 
     const validationResult = runStrategy(dispatch, parsed, 'BIN_LABEL');
     if (!validationResult.ok) {
