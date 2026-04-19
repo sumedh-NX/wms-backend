@@ -62,4 +62,20 @@ router.post('/link', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+
+// ---------------------------------------------------------------
+// FORCE FIX: Change Nagare Time column to TEXT
+// Visit this URL: https://wms-backend-e2iz.onrender.com/api/setup/fix-column
+// ---------------------------------------------------------------
+router.get('/fix-column', async (req, res) => {
+  try {
+    console.log("Attempting to force column change to TEXT...");
+    await db.query(`ALTER TABLE dispatches ALTER COLUMN ref_schedule_sent_date TYPE TEXT;`);
+    res.status(200).json({ message: "SUCCESS: Column ref_schedule_sent_date is now TEXT. You can scan now!" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to change column: " + err.message });
+  }
+});
+
 module.exports = router;
