@@ -1,7 +1,16 @@
-// src/utils/strategyEngine.js
+// src/utils/strategyEngine.js - v2 clean
 const { normalizeCode } = require('./qrParser');
 
 function runStrategy(dispatch, parsed, type) {
+  // For PICKLIST: only validate product code
+  if (type === 'PICKLIST') {
+    if (normalizeCode(dispatch.ref_product_code) !== normalizeCode(parsed.productCode)) {
+      return { ok: false, message: 'Product Code mismatch' };
+    }
+    return { ok: true };
+  }
+
+  // For BIN_LABEL: validate all fields
   const fieldsToMatch = [
     'ref_product_code',
     'ref_case_pack',
@@ -9,7 +18,6 @@ function runStrategy(dispatch, parsed, type) {
     'ref_schedule_sent_date',
     'ref_schedule_number',
   ];
-
   const map = {
     ref_product_code: 'productCode',
     ref_case_pack: 'casePack',
@@ -17,41 +25,22 @@ function runStrategy(dispatch, parsed, type) {
     ref_schedule_sent_date: 'scheduleSentDate',
     ref_schedule_number: 'scheduleNumber',
   };
-
   for (const dbField of fieldsToMatch) {
     const refVal = dispatch[dbField];
     if (refVal == null) continue;
-
     const parsedVal = parsed[map[dbField]];
-
     if (dbField === 'ref_product_code') {
       if (normalizeCode(refVal) !== normalizeCode(parsedVal)) {
         return { ok: false, message: 'Product Code mismatch' };
       }
-    } 
-    // IMPROVEMENT: For Pick-lists, casePack is optional. 
-    // Only throw error if a case pack was found and it DOES NOT match.
-    else if (dbField === 'ref_case_pack' && type === 'PICKLIST' && parsedVal === null) {
-      continue; 
-    }
-    else if (dbField === 'ref_supply_date') {
-     
-      // but since we use TEXT in DB now, we just compare strings.
+    } else {
       if (String(refVal) !== String(parsedVal)) {
-        return { ok: false, message: 'Supply Date mismatch' };
-      }
-    } 
-    else {
-      if (String(refVal) !== String(parsedVal)) {
-        const friendly = dbField.replace('ref_', '').replace('_', ' ');
+        const friendly = dbField.replace('ref_', '').replace(/_/g, ' ');
         return { ok: false, message: `${friendly} mismatch` };
       }
     }
   }
-
   return { ok: true };
 }
 
-module.exports = {
-  runStrategy,
-};
+module.exports = { runStrategy };
