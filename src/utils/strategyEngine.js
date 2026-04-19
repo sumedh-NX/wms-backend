@@ -1,9 +1,6 @@
 // src/utils/strategyEngine.js
-const { normalizeCode, normalizeDate } = require('./qrParser');
+const { normalizeCode } = require('./qrParser');
 
-/**
- * Validates a scan against the dispatch reference.
- */
 function runStrategy(dispatch, parsed, type) {
   const fieldsToMatch = [
     'ref_product_code',
@@ -23,23 +20,27 @@ function runStrategy(dispatch, parsed, type) {
 
   for (const dbField of fieldsToMatch) {
     const refVal = dispatch[dbField];
-    if (refVal == null) continue; // First bin: skip validation
+    if (refVal == null) continue;
 
     const parsedVal = parsed[map[dbField]];
 
-    // 1. Product Code Normalization (matches 18213M... with 18213-...)
     if (dbField === 'ref_product_code') {
       if (normalizeCode(refVal) !== normalizeCode(parsedVal)) {
         return { ok: false, message: 'Product Code mismatch' };
       }
     } 
-    // 2. Date Normalization (matches "2026-03-26" with "26/03/2026 07:30 PM")
+    // IMPROVEMENT: For Pick-lists, casePack is optional. 
+    // Only throw error if a case pack was found and it DOES NOT match.
+    else if (dbField === 'ref_case_pack' && type === 'PICKLIST' && parsedVal === null) {
+      continue; 
+    }
     else if (dbField === 'ref_supply_date') {
-      if (normalizeDate(refVal) !== normalizeDate(parsedVal)) {
+      // Note: normalizeDate should be imported if used here, 
+      // but since we use TEXT in DB now, we just compare strings.
+      if (String(refVal) !== String(parsedVal)) {
         return { ok: false, message: 'Supply Date mismatch' };
       }
     } 
-    // 3. Standard string/number comparison for all other fields
     else {
       if (String(refVal) !== String(parsedVal)) {
         const friendly = dbField.replace('ref_', '').replace('_', ' ');
