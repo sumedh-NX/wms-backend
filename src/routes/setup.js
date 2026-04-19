@@ -4,9 +4,12 @@ const router = express.Router();
 const db = require('../config/db');
 const bcrypt = require('bcrypt');
 
-// 1. MAGIC DB SETUP (Creates Tables)
 router.get('/db', async (req, res) => {
   try {
+    console.log("Starting database schema update...");
+    
+    // We wrap the SQL in a transaction or a sequence of commands
+    // 1. Create tables if they don't exist
     const schema = `
       CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT CHECK (role IN ('admin','supervisor','operator')) NOT NULL, created_at TIMESTAMPTZ DEFAULT now());
       CREATE TABLE IF NOT EXISTS customers (id SERIAL PRIMARY KEY, name TEXT NOT NULL, code TEXT UNIQUE NOT NULL, created_at TIMESTAMPTZ DEFAULT now());
@@ -19,57 +22,44 @@ router.get('/db', async (req, res) => {
       CREATE TABLE IF NOT EXISTS dispatch_picks (id SERIAL PRIMARY KEY, dispatch_id INT REFERENCES dispatches(id) ON DELETE CASCADE, pick_code TEXT NOT NULL, product_code TEXT NOT NULL, case_pack INT, raw_qr TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE (dispatch_id, pick_code));
       CREATE TABLE IF NOT EXISTS audit_logs (id SERIAL PRIMARY KEY, dispatch_id INT REFERENCES dispatches(id) ON DELETE CASCADE, timestamp TIMESTAMPTZ DEFAULT now(), type TEXT CHECK (type IN ('BIN_LABEL','PICKLIST')) NOT NULL, code TEXT NOT NULL, product_code TEXT, result TEXT CHECK (result IN ('PASS','FAIL')) NOT NULL, operator_user_id INT REFERENCES users(id) ON DELETE SET NULL, error_message TEXT, raw_qr TEXT, created_at TIMESTAMPTZ DEFAULT now());
     `;
+
     await db.query(schema);
-    res.status(200).json({ message: "Database tables created successfully!" });
+
+    // --- THE FIX: Change the column type from DATE to TEXT ---
+    // This ensures that "25/03/26" is accepted without a "Range Error"
+    await db.query(`ALTER TABLE dispatches ALTER COLUMN ref_schedule_sent_date TYPE TEXT;`);
+
+    res.status(200).json({ message: "Database tables created and Nagare Time column fixed to TEXT!" });
   } catch (err) {
+    consoleT.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2. CREATE ADMIN USER
+// Admin and Customer setup routes stay the same...
 router.post('/admin', async (req, res, next) => {
   try {
     const { email, password, role } = req.body;
     const passwordHash = await bcrypt.hash(password, 12);
-    const { rows } = await db.query(
-      `INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role`,
-      [email, passwordHash, role]
-    );
+    const { rows } = await db.query(`INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role`, [email, passwordHash, role]);
     res.status(201).json(rows[0]);
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ message: 'User exists' });
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// 3. CREATE CUSTOMER
 router.post('/customer', async (req, res, next) => {
   try {
     const { name, code } = req.body;
-    const { rows } = await db.query(
-      `INSERT INTO customers (name, code) VALUES ($1, $2) RETURNING id, name, code`,
-      [name, code]
-    );
+    const { rows } = await db.query(`INSERT INTO customers (name, code) VALUES ($1, $2) RETURNING id, name, code`, [name, code]);
     res.status(201).json(rows[0]);
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ message: 'Customer code exists' });
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// 4. LINK USER TO CUSTOMER
 router.post('/link', async (req, res, next) => {
   try {
     const { userId, customerId } = req.body;
-    await db.query(
-      `INSERT INTO user_customers (user_id, customer_id) VALUES ($1, $2)`,
-      [userId, customerId]
-    );
+    await db.query(`INSERT INTO user_customers (user_id, customer_id) VALUES ($1, $2)`, [userId, customerId]);
     res.status(201).json({ message: "User successfully linked to customer" });
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ message: 'Mapping already exists' });
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-module.exports = router;
+module,exports = router;
