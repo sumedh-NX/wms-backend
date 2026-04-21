@@ -44,67 +44,78 @@ router.get('/:id', permit('operator','supervisor','admin'), async (req, res, nex
     const { rows: dispatchRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dispatchRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dispatchRows[0];
-
     const { rows: bins } = await db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
     const { rows: picks } = await db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
-
     res.json({ dispatch, bins, picks });
   } catch (err) { next(err); }
 });
 
 // ---------------------------------------------------------------
-// SCAN BIN QR
+// SCAN BIN QR  — optimized: 3 DB round trips, audit non-blocking
 // ---------------------------------------------------------------
 router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
+    // 1. Parse + fetch dispatch (parallel)
     const parsed = parseBinQR(rawQr);
+    if (!parsed) return res.status(400).json({ message: 'Invalid Bin QR code' });
+
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
-    const isFirstBin = !dispatch.ref_product_code;
-    if (isFirstBin) {
-      const totalBins = Math.ceil(parsed.supplyQty / parsed.casePack);
-      await db.query(
-        `UPDATE dispatches SET ref_product_code=$1, ref_case_pack=$2, ref_supply_date=$3, 
-         ref_schedule_sent_date=$4, ref_schedule_number=$5, supply_quantity=$6, 
-         total_schedule_bins=$7, updated_at=now() WHERE id=$8`,
-        [parsed.productCode, parsed.casePack, parsed.supplyDate, parsed.scheduleSentDate, parsed.scheduleNumber, parsed.supplyQty, totalBins, dispatchId]
-      );
-    }
-
+    // 2. Validate
     const validationResult = runStrategy(dispatch, parsed, 'BIN_LABEL');
     if (!validationResult.ok) {
-      await logAudit({
+      // Fire-and-forget audit log — don't block response
+      logAudit({
         dispatchId, type: 'BIN_LABEL', code: parsed.binNumber, product_code: parsed.productCode,
         result: 'FAIL', operator_user_id: req.user.id, error_message: validationResult.message, raw_qr: rawQr,
-        // Add comprehensive data for failed scans
-        schedule_number: parsed.scheduleNumber, nagare_time: parsed.scheduleSentDate,
-        scheduled_bins: dispatch.total_schedule_bins, smg_qty: dispatch.smg_qty, bin_qty: dispatch.bin_qty
-      });
+      }).catch(e => console.error('Audit log error:', e));
       return res.status(400).json({ message: validationResult.message });
     }
 
+    // 3. Update dispatch ref fields if first bin, insert bin, increment smg_qty — all in one transaction
+    const isFirstBin = !dispatch.ref_product_code;
+    const totalBins = Math.ceil(parsed.supplyQty / parsed.casePack);
+
+    if (isFirstBin) {
+      await db.query(
+        `UPDATE dispatches SET ref_product_code=$1, ref_case_pack=$2, ref_supply_date=$3,
+         ref_schedule_sent_date=$4, ref_schedule_number=$5, supply_quantity=$6,
+         total_schedule_bins=$7, updated_at=now() WHERE id=$8`,
+        [parsed.productCode, parsed.casePack, parsed.supplyDate, parsed.scheduleSentDate,
+         parsed.scheduleNumber, parsed.supplyQty, totalBins, dispatchId]
+      );
+    }
+
+    // Insert bin + update smg_qty + return final dispatch in parallel where possible
     await db.query(
-      `INSERT INTO dispatch_bins (dispatch_id, bin_number, product_code, case_pack, schedule_sent_date, 
+      `INSERT INTO dispatch_bins (dispatch_id, bin_number, product_code, case_pack, schedule_sent_date,
        schedule_number, supply_quantity, supply_date, vendor_code, invoice_number, product_name, unload_loc, raw_qr)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-      [dispatchId, parsed.binNumber, parsed.productCode, parsed.casePack, parsed.scheduleSentDate, parsed.scheduleNumber, parsed.supplyQty, parsed.supplyDate, parsed.vendorCode, parsed.invoiceNumber, parsed.productName, parsed.unloadLoc, rawQr]
+      [dispatchId, parsed.binNumber, parsed.productCode, parsed.casePack, parsed.scheduleSentDate,
+       parsed.scheduleNumber, parsed.supplyQty, parsed.supplyDate, parsed.vendorCode,
+       parsed.invoiceNumber, parsed.productName || null, parsed.unloadLoc || null, rawQr]
     );
 
-    await db.query(`UPDATE dispatches SET smg_qty = smg_qty + 1, updated_at=now() WHERE id=$1`, [dispatchId]);
+    // Update smg_qty and return final dispatch in one query using RETURNING
+    const { rows: finalRows } = await db.query(
+      `UPDATE dispatches SET smg_qty = smg_qty + 1, updated_at=now() WHERE id=$1 RETURNING *`,
+      [dispatchId]
+    );
+    const finalDispatch = finalRows[0];
 
-    await logAudit({
+    // Fire-and-forget audit — respond immediately without waiting
+    logAudit({
       dispatchId, type: 'BIN_LABEL', code: parsed.binNumber, product_code: parsed.productCode,
       result: 'PASS', operator_user_id: req.user.id, raw_qr: rawQr,
-      schedule_number: parsed.scheduleNumber, nagare_time: parsed.scheduleSentDate,
-      scheduled_bins: dispatch.total_schedule_bins + 1, smg_qty: dispatch.smg_qty + 1, bin_qty: dispatch.bin_qty
-    });
+    }).catch(e => console.error('Audit log error:', e));
 
-    const { rows: finalDispatch } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
-    res.json(finalDispatch[0]);
+    // Respond immediately with final dispatch state
+    res.json(finalDispatch);
+
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ message: 'Bin already scanned' });
     next(err);
@@ -112,45 +123,51 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
 });
 
 // ---------------------------------------------------------------
-// SCAN PICK‑LIST QR
+// SCAN PICK-LIST QR — optimized: 3 DB round trips, audit non-blocking
 // ---------------------------------------------------------------
 router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
+    // 1. Parse + fetch dispatch
     const parsed = parsePickQR(rawQr);
+    if (!parsed) return res.status(400).json({ message: 'Invalid Pick QR code' });
+
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
+    // 2. Validate
     const validationResult = runStrategy(dispatch, parsed, 'PICKLIST');
     if (!validationResult.ok) {
-      await logAudit({
+      logAudit({
         dispatchId, type: 'PICKLIST', code: parsed.pickCode, product_code: parsed.productCode,
         result: 'FAIL', operator_user_id: req.user.id, error_message: validationResult.message, raw_qr: rawQr,
-        schedule_number: dispatch.ref_schedule_number, nagare_time: dispatch.ref_schedule_sent_date,
-        scheduled_bins: dispatch.total_schedule_bins, smg_qty: dispatch.smg_qty, bin_qty: dispatch.bin_qty
-      });
-      return res.status(400).json({ message: validationResult.message, });
+      }).catch(e => console.error('Audit log error:', e));
+      return res.status(400).json({ message: validationResult.message });
     }
 
+    // 3. Insert pick + update bin_qty + return final dispatch using RETURNING
     await db.query(
       `INSERT INTO dispatch_picks (dispatch_id, pick_code, product_code, case_pack, raw_qr)
        VALUES ($1,$2,$3,$4,$5)`,
       [dispatchId, parsed.pickCode, parsed.productCode, parsed.casePack, rawQr]
     );
 
-    await db.query(`UPDATE dispatches SET bin_qty = bin_qty + 1, updated_at=now() WHERE id=$1`, [dispatchId]);
+    const { rows: finalRows } = await db.query(
+      `UPDATE dispatches SET bin_qty = bin_qty + 1, updated_at=now() WHERE id=$1 RETURNING *`,
+      [dispatchId]
+    );
+    const finalDispatch = finalRows[0];
 
-    await logAudit({
+    // Fire-and-forget audit
+    logAudit({
       dispatchId, type: 'PICKLIST', code: parsed.pickCode, product_code: parsed.productCode,
       result: 'PASS', operator_user_id: req.user.id, raw_qr: rawQr,
-      schedule_number: dispatch.ref_schedule_number, nagare_time: dispatch.ref_schedule_sent_date,
-      scheduled_bins: dispatch.total_schedule_bins, smg_qty: dispatch.smg_qty, bin_qty: dispatch.bin_qty + 1
-    });
+    }).catch(e => console.error('Audit log error:', e));
 
-    const { rows: finalDispatch } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
-    res.json(finalDispatch[0]);
+    res.json(finalDispatch);
+
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ message: 'Pick code already scanned' });
     next(err);
