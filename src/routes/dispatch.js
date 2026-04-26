@@ -7,16 +7,24 @@ const { runStrategy } = require('../utils/strategyEngine');
 const { logAudit } = require('../utils/auditLogger');
 
 // ---------------------------------------------------------------
-// LIST DISPATCHES
+// LIST DISPATCHES (UPDATED: Added Date Range Filter)
 // ---------------------------------------------------------------
 router.get('/', permit('operator','supervisor','admin'), async (req, res, next) => {
   try {
-    const { customerId } = req.query;
+    const { customerId, startDate, endDate } = req.query;
     if (!customerId) return res.status(400).json({ message: 'customerId required' });
-    const { rows } = await db.query(
-      `SELECT id, dispatch_number, status, created_at FROM dispatches WHERE customer_id = $1 ORDER BY created_at DESC`,
-      [customerId]
-    );
+
+    let query = `SELECT * FROM dispatches WHERE customer_id = $1`;
+    let params = [customerId];
+
+    // Nagare Time is stored in ref_supply_date (DD/MM/YY)
+    if (startDate && endDate) {
+      query += ` AND ref_supply_date >= $2 AND ref_supply_date <= $3`;
+      params.push(startDate, endDate);
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    const { rows } = await db.query(query, params);
     res.json(rows);
   } catch (err) { next(err); }
 });
@@ -36,7 +44,7 @@ router.post('/', permit('operator','supervisor','admin'), async (req, res, next)
 });
 
 // ---------------------------------------------------------------
-// GET DISPATCH DETAIL
+// GET DISPATCH DETAIL (UPDATED: Added Audit Logs for PDF)
 // ---------------------------------------------------------------
 router.get('/:id', permit('operator','supervisor','admin'), async (req, res, next) => {
   try {
@@ -44,20 +52,24 @@ router.get('/:id', permit('operator','supervisor','admin'), async (req, res, nex
     const { rows: dispatchRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dispatchRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dispatchRows[0];
+    
     const { rows: bins } = await db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
     const { rows: picks } = await db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
-    res.json({ dispatch, bins, picks });
+    
+    // Fetch full audit logs for the report (including failures)
+    const { rows: logs } = await db.query(`SELECT * FROM audit_logs WHERE dispatch_id=$1 ORDER BY created_at ASC`, [dispatchId]);
+    
+    res.json({ dispatch, bins, picks, logs });
   } catch (err) { next(err); }
 });
 
 // ---------------------------------------------------------------
-// SCAN BIN QR  — optimized: 3 DB round trips, audit non-blocking
+// SCAN BIN QR
 // ---------------------------------------------------------------
 router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
-    // 1. Parse + fetch dispatch (parallel)
     const parsed = parseBinQR(rawQr);
     if (!parsed) return res.status(400).json({ message: 'Invalid Bin QR code' });
 
@@ -65,10 +77,8 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
-    // 2. Validate
     const validationResult = runStrategy(dispatch, parsed, 'BIN_LABEL');
     if (!validationResult.ok) {
-      // Fire-and-forget audit log — don't block response
       logAudit({
         dispatchId, type: 'BIN_LABEL', code: parsed.binNumber, product_code: parsed.productCode,
         result: 'FAIL', operator_user_id: req.user.id, error_message: validationResult.message, raw_qr: rawQr,
@@ -76,7 +86,6 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
       return res.status(400).json({ message: validationResult.message });
     }
 
-    // 3. Update dispatch ref fields if first bin, insert bin, increment smg_qty — all in one transaction
     const isFirstBin = !dispatch.ref_product_code;
     const totalBins = Math.ceil(parsed.supplyQty / parsed.casePack);
 
@@ -90,7 +99,6 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
       );
     }
 
-    // Insert bin + update smg_qty + return final dispatch in parallel where possible
     await db.query(
       `INSERT INTO dispatch_bins (dispatch_id, bin_number, product_code, case_pack, schedule_sent_date,
        schedule_number, supply_quantity, supply_date, vendor_code, invoice_number, product_name, unload_loc, raw_qr)
@@ -100,22 +108,18 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
        parsed.invoiceNumber, parsed.productName || null, parsed.unloadLoc || null, rawQr]
     );
 
-    // Update smg_qty and return final dispatch in one query using RETURNING
     const { rows: finalRows } = await db.query(
       `UPDATE dispatches SET smg_qty = smg_qty + 1, updated_at=now() WHERE id=$1 RETURNING *`,
       [dispatchId]
     );
     const finalDispatch = finalRows[0];
 
-    // Fire-and-forget audit — respond immediately without waiting
     logAudit({
       dispatchId, type: 'BIN_LABEL', code: parsed.binNumber, product_code: parsed.productCode,
       result: 'PASS', operator_user_id: req.user.id, raw_qr: rawQr,
     }).catch(e => console.error('Audit log error:', e));
 
-    // Respond immediately with final dispatch state
     res.json(finalDispatch);
-
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ message: 'Bin already scanned' });
     next(err);
@@ -123,13 +127,12 @@ router.post('/:id/scan-bin', permit('operator','supervisor','admin'), async (req
 });
 
 // ---------------------------------------------------------------
-// SCAN PICK-LIST QR — optimized: 3 DB round trips, audit non-blocking
+// SCAN PICK-LIST QR
 // ---------------------------------------------------------------
 router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
-    // 1. Parse + fetch dispatch
     const parsed = parsePickQR(rawQr);
     if (!parsed) return res.status(400).json({ message: 'Invalid Pick QR code' });
 
@@ -137,7 +140,6 @@ router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (re
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
-    // 2. Validate
     const validationResult = runStrategy(dispatch, parsed, 'PICKLIST');
     if (!validationResult.ok) {
       logAudit({
@@ -147,7 +149,6 @@ router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (re
       return res.status(400).json({ message: validationResult.message });
     }
 
-    // 3. Insert pick + update bin_qty + return final dispatch using RETURNING
     await db.query(
       `INSERT INTO dispatch_picks (dispatch_id, pick_code, product_code, case_pack, raw_qr)
        VALUES ($1,$2,$3,$4,$5)`,
@@ -160,14 +161,12 @@ router.post('/:id/scan-pick', permit('operator','supervisor','admin'), async (re
     );
     const finalDispatch = finalRows[0];
 
-    // Fire-and-forget audit
     logAudit({
       dispatchId, type: 'PICKLIST', code: parsed.pickCode, product_code: parsed.productCode,
       result: 'PASS', operator_user_id: req.user.id, raw_qr: rawQr,
     }).catch(e => console.error('Audit log error:', e));
 
     res.json(finalDispatch);
-
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ message: 'Pick code already scanned' });
     next(err);
