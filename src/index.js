@@ -7,23 +7,25 @@ const dispatchRoutes = require('./routes/dispatch');
 const adminRoutes = require('./routes/admin');
 const { errorHandler } = require('./middleware/error');
 const setupRoutes = require('./routes/setup');
+const { verifyToken } = require('./middleware/auth');
 
 const app = express();
 
 app.use(cors({ origin: process.env.CORS_ORIGIN }));
 app.use(express.json());
 
-// Public routes
+// --- PUBLIC ROUTES ---
 app.use('/api/auth', authRoutes);
 app.use('/api/setup', setupRoutes); 
-// Protected routes – JWT middleware
-const { verifyToken } = require('./middleware/auth');
+
+// --- PROTECTED ROUTES ---
+// This middleware ensures every request below this line has a valid JWT
 app.use('/api', verifyToken);
 
-// Role‑based groups
+// Role-based groups (all these now require verifyToken)
 app.use('/api/customers', customerRoutes);
-app.use('/api/dispatch', dispatchRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/dispatch', dispatchRoutes); // Singular
+app.use('/api/admin', adminRoutes);       // Merged User & Strategy management
 
 // Global error handler
 app.use(errorHandler);
