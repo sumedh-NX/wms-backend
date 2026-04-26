@@ -9,18 +9,19 @@ const { logAudit } = require('../utils/auditLogger');
 // ---------------------------------------------------------------
 // LIST DISPATCHES (UPDATED: Added Date Range Filter)
 // ---------------------------------------------------------------
+
 router.get('/', permit('operator','supervisor','admin'), async (req, res, next) => {
   try {
-    const { customerId, nagareDate } = req.query;
+    const { customerId, startDate, endDate } = req.query;
     if (!customerId) return res.status(400).json({ message: 'customerId required' });
 
     let query = `SELECT * FROM dispatches WHERE customer_id = $1`;
     let params = [customerId];
 
-    // Filter by specific Nagare Time (ref_supply_date)
-    if (nagareDate) {
-      query += ` AND ref_supply_date = $2`;
-      params.push(nagareDate);
+    // Filter by Dispatch Date (created_at)
+    if (startDate && endDate) {
+      query += ` AND created_at >= $2::timestamp AND created_at <= $3::timestamp`;
+      params.push(`${startDate} 00:00:00`, `${endDate} 23:59:59`);
     }
 
     query += ` ORDER BY created_at DESC`;
@@ -28,6 +29,7 @@ router.get('/', permit('operator','supervisor','admin'), async (req, res, next) 
     res.json(rows);
   } catch (err) { next(err); }
 });
+
 
 
 // ---------------------------------------------------------------
