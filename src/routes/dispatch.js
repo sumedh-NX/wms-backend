@@ -11,16 +11,16 @@ const { logAudit } = require('../utils/auditLogger');
 // ---------------------------------------------------------------
 router.get('/', permit('operator','supervisor','admin'), async (req, res, next) => {
   try {
-    const { customerId, startDate, endDate } = req.query;
+    const { customerId, nagareDate } = req.query;
     if (!customerId) return res.status(400).json({ message: 'customerId required' });
 
     let query = `SELECT * FROM dispatches WHERE customer_id = $1`;
     let params = [customerId];
 
-    // Nagare Time is stored in ref_supply_date (DD/MM/YY)
-    if (startDate && endDate) {
-      query += ` AND ref_supply_date >= $2 AND ref_supply_date <= $3`;
-      params.push(startDate, endDate);
+    // Filter by specific Nagare Time (ref_supply_date)
+    if (nagareDate) {
+      query += ` AND ref_supply_date = $2`;
+      params.push(nagareDate);
     }
 
     query += ` ORDER BY created_at DESC`;
@@ -28,6 +28,7 @@ router.get('/', permit('operator','supervisor','admin'), async (req, res, next) 
     res.json(rows);
   } catch (err) { next(err); }
 });
+
 
 // ---------------------------------------------------------------
 // CREATE NEW DISPATCH
