@@ -56,8 +56,15 @@ router.get('/:id', permit('operator','supervisor','admin'), async (req, res, nex
     const { rows: bins } = await db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
     const { rows: picks } = await db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
     
-    // Fetch full audit logs for the report (including failures)
-    const { rows: logs } = await db.query(`SELECT * FROM audit_logs WHERE dispatch_id=$1 ORDER BY created_at ASC`, [dispatchId]);
+    // UPDATED: Join with users table to get the actual operator name/email
+    const { rows: logs } = await db.query(
+      `SELECT al.*, u.email as operator_name 
+       FROM audit_logs al 
+       JOIN users u ON al.operator_user_id = u.id 
+       WHERE al.dispatch_id=$1 
+       ORDER BY al.created_at ASC`, 
+      [dispatchId]
+    );
     
     res.json({ dispatch, bins, picks, logs });
   } catch (err) { next(err); }
