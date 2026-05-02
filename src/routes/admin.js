@@ -147,7 +147,6 @@ router.get('/strategies', async (req, res, next) => {
 router.post('/strategies', async (req, res, next) => {
   const { code, name, description, config, custom_js } = req.body;
   try {
-    // config is an object from frontend, must be stringified for the DB
     const configString = typeof config === 'object' ? JSON.stringify(config) : config;
     
     const { rows } = await db.query(
@@ -159,11 +158,15 @@ router.post('/strategies', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST: Map a specific strategy to a specific customer
+/* -----------------------------------------------------------------
+   STRATEGY MANAGEMENT UPDATES
+----------------------------------------------------------------- */
+
+// 1. NEW: POST Map a strategy to a customer (RESTORED)
 router.post('/customer-strategy', async (req, res, next) => {
   const { customerId, strategyId } = req.body;
   try {
-    // First, remove any existing strategy for this customer to prevent duplicates
+    // Remove existing strategy for this customer to prevent duplicates
     await db.query(`DELETE FROM customer_strategies WHERE customer_id=$1`, [customerId]);
     
     await db.query(
@@ -171,6 +174,37 @@ router.post('/customer-strategy', async (req, res, next) => {
       [customerId, strategyId]
     );
     res.json({ message: 'Strategy assigned successfully' });
+  } catch (err) { next(err); }
+});
+
+// 2. NEW: GET all current customer-strategy mappings
+router.get('/customer-strategies', async (req, res, next) => {
+  try {
+    const query = `
+      SELECT cs.customer_id, c.name as customer_name, vs.name as strategy_name, vs.code as strategy_code, vs.id as strategy_id
+      FROM customer_strategies cs
+      JOIN customers c ON cs.customer_id = c.id
+      JOIN validation_strategies vs ON cs.strategy_id = vs.id
+      ORDER BY c.name ASC
+    `;
+    const { rows } = await db.query(query);
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+// 3. NEW: Delete a specific customer-strategy link (Unlink)
+router.delete('/customer-strategy/:customerId', async (req, res, next) => {
+  try {
+    await db.query(`DELETE FROM customer_strategies WHERE customer_id=$1`, [req.params.customerId]);
+    res.json({ message: 'Strategy unlinked from customer' });
+  } catch (err) { next(err); }
+});
+
+// 4. NEW: Delete a validation strategy entirely
+router.delete('/strategies/:id', async (req, res, next) => {
+  try {
+    await db.query(`DELETE FROM validation_strategies WHERE id=$1`, [req.params.id]);
+    res.json({ message: 'Strategy deleted successfully' });
   } catch (err) { next(err); }
 });
 
