@@ -4,14 +4,14 @@ const db = require('../config/db');
 const bcrypt = require('bcrypt');
 const { permit } = require('../middleware/auth');
 
-// Only admins can touch these routes
+// 🛡️ SECURITY: Only users with 'admin' role can access any route in this file
 router.use(permit('admin'));
 
-/* ---------------------------------------------------------------
-   USER MANAGEMENT (NEWLY ADDED & UPDATED)
+/* -----------------------------------------------------------------
+   1. USER MANAGEMENT
 ----------------------------------------------------------------- */
 
-// 1. LIST ALL USERS WITH THEIR ASSIGNED CUSTOMERS
+// GET: List all users with their assigned customers
 router.get('/users', async (req, res, next) => {
   try {
     const query = `
@@ -28,42 +28,51 @@ router.get('/users', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 2. CREATE NEW USER
+// POST: Create a new user and assign customers
 router.post('/users', async (req, res, next) => {
   try {
     const { email, password, role, customerIds } = req.body;
+    if (!email || !password || !role) {
+      return res.status(400).json({ message: 'Email, password, and role are required' });
+    }
+
     const hash = await bcrypt.hash(password, 12);
 
-    await db.query('BEGIN');
+    await db.query('BEGIN'); // Start transaction
+    
     const { rows: userRows } = await db.query(
       `INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id`,
       [email, hash, role]
     );
     const userId = userRows[0].id;
 
-    if (customerIds && customerIds.length > 0) {
+    // Assign customers if provided
+    if (customerIds && Array.isArray(customerIds) && customerIds.length > 0) {
       for (const cId of customerIds) {
         await db.query(`INSERT INTO user_customers (user_id, customer_id) VALUES ($1, $2)`, [userId, cId]);
       }
     }
-    await db.query('COMMIT');
+
+    await db.query('COMMIT'); // Save changes
     res.json({ message: 'User created successfully', userId });
   } catch (err) {
-    await db.query('ROLLBACK');
+    await db.query('ROLLBACK'); // Undo changes if error occurs
     next(err);
   }
 });
 
-// 3. UPDATE USER & SYNC CUSTOMERS
+// PUT: Update user details and re-sync customer assignments
 router.put('/users/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     const { email, password, role, customerIds } = req.body;
 
     await db.query('BEGIN');
+
     let updateQuery = `UPDATE users SET email=$1, role=$2`;
     let params = [email, role];
 
+    // Only update password if a new one was provided
     if (password) {
       const hash = await bcrypt.hash(password, 12);
       updateQuery += `, password_hash=$3`;
@@ -71,14 +80,17 @@ router.put('/users/:id', async (req, res, next) => {
     }
     updateQuery += ` WHERE id=$${params.length + 1}`;
     params.push(id);
+    
     await db.query(updateQuery, params);
 
+    // Refresh Customer Mapping: Delete old and insert new
     await db.query(`DELETE FROM user_customers WHERE user_id=$1`, [id]);
-    if (customerIds && customerIds.length > 0) {
+    if (customerIds && Array.isArray(customerIds) && customerIds.length > 0) {
       for (const cId of customerIds) {
         await db.query(`INSERT INTO user_customers (user_id, customer_id) VALUES ($1, $2)`, [id, cId]);
       }
     }
+
     await db.query('COMMIT');
     res.json({ message: 'User updated successfully' });
   } catch (err) {
@@ -87,7 +99,7 @@ router.put('/users/:id', async (req, res, next) => {
   }
 });
 
-// 4. DELETE USER
+// DELETE: Remove user
 router.delete('/users/:id', async (req, res, next) => {
   try {
     await db.query(`DELETE FROM users WHERE id=$1`, [req.params.id]);
@@ -95,7 +107,11 @@ router.delete('/users/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 5. GET ALL CUSTOMERS (For the Admin User Modal dropdown)
+/* -----------------------------------------------------------------
+   2. CUSTOMER MANAGEMENT
+----------------------------------------------------------------- */
+
+// GET: List all customers (Used for Admin Dropdowns)
 router.get('/customers', async (req, res, next) => {
   try {
     const { rows } = await db.query(`SELECT id, name, code FROM customers ORDER BY name ASC`);
@@ -103,12 +119,7 @@ router.get('/customers', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-
-/* ---------------------------------------------------------------
-   CUSTOMER & STRATEGY MANAGEMENT (EXISTING LOGIC RESTORED)
------------------------------------------------------------------ */
-
-// Create Customer
+// POST: Create a new customer
 router.post('/customers', async (req, res, next) => {
   const { name, code } = req.body;
   try {
@@ -120,42 +131,46 @@ router.post('/customers', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// Mapping User to Customer (Basic endpoint)
-router.post('/user-customer', async (req, res, next) => {
-  const { userId, customerId } = req.body;
+/* -----------------------------------------------------------------
+   3. VALIDATION STRATEGY MANAGEMENT
+----------------------------------------------------------------- */
+
+// GET: List all defined strategies
+router.get('/strategies', async (req, res, next) => {
   try {
-    await db.query(
-      `INSERT INTO user_customers (user_id, customer_id) VALUES ($1,$2)`,
-      [userId, customerId]
-    );
-    res.json({ message: 'Mapping added' });
+    const { rows } = await db.query(`SELECT * FROM validation_strategies ORDER BY created_at DESC`);
+    res.json(rows);
   } catch (err) { next(err); }
 });
 
-// Create Validation Strategy
+// POST: Create a new validation strategy
 router.post('/strategies', async (req, res, next) => {
   const { code, name, description, config, custom_js } = req.body;
   try {
+    // config is an object from frontend, must be stringified for the DB
+    const configString = typeof config === 'object' ? JSON.stringify(config) : config;
+    
     const { rows } = await db.query(
-      `INSERT INTO validation_strategies
-        (code, name, description, config, custom_js)
+      `INSERT INTO validation_strategies (code, name, description, config, custom_js)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [code, name, description, config, custom_js]
+      [code, name, description, configString, custom_js]
     );
     res.json(rows[0]);
   } catch (err) { next(err); }
 });
 
-// Assign Strategy to Customer
+// POST: Map a specific strategy to a specific customer
 router.post('/customer-strategy', async (req, res, next) => {
   const { customerId, strategyId } = req.body;
   try {
+    // First, remove any existing strategy for this customer to prevent duplicates
+    await db.query(`DELETE FROM customer_strategies WHERE customer_id=$1`, [customerId]);
+    
     await db.query(
-      `INSERT INTO customer_strategies (customer_id, strategy_id)
-       VALUES ($1,$2)`,
+      `INSERT INTO customer_strategies (customer_id, strategy_id) VALUES ($1,$2)`,
       [customerId, strategyId]
     );
-    res.json({ message: 'Strategy assigned to customer' });
+    res.json({ message: 'Strategy assigned successfully' });
   } catch (err) { next(err); }
 });
 
