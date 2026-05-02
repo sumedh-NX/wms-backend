@@ -1,46 +1,39 @@
-// src/utils/strategyEngine.js - v2 clean
-const { normalizeCode } = require('./qrParser');
+const db = require('../config/db');
+const { getStrategy } = require('../strategies');
 
-function runStrategy(dispatch, parsed, type) {
-  // For PICKLIST: only validate product code
-  if (type === 'PICKLIST') {
-    if (normalizeCode(dispatch.ref_product_code) !== normalizeCode(parsed.productCode)) {
-      return { ok: false, message: 'Product Code mismatch' };
+async function runStrategy(dispatch, parsed, type) {
+  try {
+    // 1. Find the strategy code assigned to this customer in the DB
+    const strategyQuery = `
+      SELECT vs.code 
+      FROM validation_strategies vs
+      JOIN customer_strategies cs ON vs.id = cs.strategy_id
+      WHERE cs.customer_id = $1
+    `;
+    const { rows } = await db.query(strategyQuery, [dispatch.customer_id]);
+    
+    if (rows.length === 0) {
+      // If no strategy is assigned, we default to a "Basic" pass 
+      // or you can change this to return { ok: false, message: 'No strategy assigned' }
+      return { ok: true }; 
     }
-    return { ok: true };
-  }
 
-  // For BIN_LABEL: validate all fields
-  const fieldsToMatch = [
-    'ref_product_code',
-    'ref_case_pack',
-    'ref_supply_date',
-    'ref_schedule_sent_date',
-    'ref_schedule_number',
-  ];
-  const map = {
-    ref_product_code: 'productCode',
-    ref_case_pack: 'casePack',
-    ref_supply_date: 'supplyDate',
-    ref_schedule_sent_date: 'scheduleSentDate',
-    ref_schedule_number: 'scheduleNumber',
-  };
-  for (const dbField of fieldsToMatch) {
-    const refVal = dispatch[dbField];
-    if (refVal == null) continue;
-    const parsedVal = parsed[map[dbField]];
-    if (dbField === 'ref_product_code') {
-      if (normalizeCode(refVal) !== normalizeCode(parsedVal)) {
-        return { ok: false, message: 'Product Code mismatch' };
-      }
-    } else {
-      if (String(refVal) !== String(parsedVal)) {
-        const friendly = dbField.replace('ref_', '').replace(/_/g, ' ');
-        return { ok: false, message: `${friendly} mismatch` };
-      }
+    const strategyCode = rows[0].code; 
+    const strategyLogic = getStrategy(strategyCode);
+
+    // 2. Execute the specific logic from the isolated file
+    if (type === 'BIN_LABEL') {
+      return strategyLogic.validateBin(dispatch, parsed);
+    } 
+    if (type === 'PICKLIST') {
+      return strategyLogic.validatePick(dispatch, parsed);
     }
+
+    return { ok: false, message: 'Unknown scan type' };
+  } catch (err) {
+    console.error('Strategy Engine Error:', err);
+    return { ok: false, message: 'System error during validation' };
   }
-  return { ok: true };
 }
 
 module.exports = { runStrategy };
