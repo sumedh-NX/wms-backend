@@ -13,10 +13,9 @@ async function runStrategy(dispatch, parsed, type) {
     const { rows } = await db.query(strategyQuery, [dispatch.customer_id]);
     
     if (rows.length === 0) {
-      // If no strategy is assigned, we default to a "Basic" pass 
-      // or you can change this to return { ok: false, message: 'No strategy assigned' }
-      return { ok: true }; 
+    return { ok: false, message: 'No validation strategy assigned to this customer. Please contact admin.' };
     }
+
 
     const strategyCode = rows[0].code; 
     const strategyLogic = getStrategy(strategyCode);
