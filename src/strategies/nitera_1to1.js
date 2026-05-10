@@ -1,5 +1,5 @@
 // src/strategies/nitera_1to1.js
-const { normalizeCode } = require('../utils/qrParser');
+const { normalizeNiteraCode } = require('../utils/niteraParser');
 
 module.exports = {
   name: 'Nitera 1:1 Validation',
@@ -21,7 +21,7 @@ module.exports = {
       const parsedVal = parsed[field.parsed];
       
       if (field.db === 'ref_product_code') {
-        if (normalizeCode(refVal) !== normalizeCode(parsedVal)) {
+        if (normalizeNiteraCode(refVal) !== normalizeNiteraCode(parsedVal)) {
           return { ok: false, message: `Product Code mismatch: ${field.label}` };
         }
       } else {
@@ -35,7 +35,7 @@ module.exports = {
 
   // This is called during the PICKLIST scan
   validatePick: (dispatch, parsed) => {
-    if (normalizeCode(dispatch.ref_product_code) !== normalizeCode(parsed.productCode)) {
+    if (normalizeNiteraCode(dispatch.ref_product_code) !== normalizeNiteraCode(parsed.productCode)) {
       return { ok: false, message: 'Pick-list Product Code mismatch' };
     }
     return { ok: true };

@@ -1,35 +1,20 @@
 /**
- * qrParser.js — Universal QR Parsing & Normalization
- * 
- * This file handles:
- * 1. Nitera Bin QR parsing (Anchor-based).
- * 2. Nitera Picklist QR parsing (G-Header based).
- * 3. Global Product Code Normalization (Shared by Nitera and Usui).
+ * niteraParser.js
+ * Dedicated strictly to Nitera 1:1 Workflow.
  */
 
-/**
- * normalizeCode: The most critical function in the system.
- * It ensures that product codes from different sources match.
- * Example: "18213-74T10" -> "1821374T10"
- * Example: "18213M74T10"  -> "1821374T10"
- */
-function normalizeCode(code) {
+function normalizeNiteraCode(code) {
   if (!code) return '';
   return code
     .toUpperCase()
     .trim()
-    .replace(/-/g, '') // Remove all dashes
-    .replace(/(?<=\d)M(?=\d)/g, ''); // Remove 'M' ONLY if it is between two numbers
+    .replace(/-/g, '') 
+    .replace(/(?<=\d)M(?=\d)/g, ''); // Nitera specific 'M' removal
 }
 
-/**
- * parseBinQR (Used by NITERA Workflow)
- * Handles multi-line bin labels using the Bin Number as an anchor.
- */
 function parseBinQR(raw) {
   try {
     const t = raw.trim().replace(/\s+/g, ' ');
-
     const binMatch = t.match(/^(\d{13})/);
     if (!binMatch) throw new Error('No bin number found');
     const binNumber = binMatch[1];
@@ -69,31 +54,18 @@ function parseBinQR(raw) {
     const supplyDate = sdMatch ? sdMatch[1] : null;
 
     return {
-      binNumber,
-      productCode,
-      casePack,
-      totalBins,
-      supplyQty,
-      scheduleSentDate,
-      invoiceNumber,
-      vendorCode,
-      scheduleNumber,
-      unloadLocation,
-      supplyDate,
+      binNumber, productCode, casePack, totalBins, supplyQty,
+      scheduleSentDate, invoiceNumber, vendorCode, scheduleNumber,
+      unloadLocation, supplyDate,
     };
   } catch (err) {
     return null;
   }
 }
 
-/**
- * parsePickQR (Used by NITERA Workflow)
- * Extracts the G-header (unique pick ID) and product details.
- */
 function parsePickQR(raw) {
   try {
     const t = raw.trim().replace(/\s+/g, ' ');
-
     const pickCodeMatch = t.match(/^(G\S+)/i);
     if (!pickCodeMatch) return null;
     const pickCode = pickCodeMatch[1];
@@ -112,8 +84,4 @@ function parsePickQR(raw) {
   }
 }
 
-module.exports = { 
-  parseBinQR, 
-  parsePickQR, 
-  normalizeCode 
-};
+module.exports = { parseBinQR, parsePickQR, normalizeNiteraCode };
