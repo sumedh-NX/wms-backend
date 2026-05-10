@@ -43,7 +43,7 @@ router.post('/', permit('operator', 'supervisor', 'admin'), async (req, res, nex
   } catch (err) { next(err); }
 });
 
-// GET /api/dispatch/:id - Get full details for the Dispatch Screen
+// GET /api/dispatch/:id - Get full details for the Dispatch Screen (CRASH-PROOF VERSION)
 router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   try {
     const dispatchId = req.params.id;
@@ -51,18 +51,26 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
     if (dispatchRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dispatchRows[0];
     
-    const { rows: bins } = await db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
-    const { rows: picks } = await db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
-    const { rows: parts } = await db.query(`SELECT * FROM dispatch_parts WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]);
-    
-    const { rows: logs } = await db.query(
-      `SELECT al.*, u.email as operator_name FROM audit_logs al JOIN users u ON al.operator_user_id = u.id WHERE al.dispatch_id=$1 ORDER BY al.created_at ASC`, 
-      [dispatchId]
-    );
-    
-    res.json({ dispatch, bins, picks, parts, logs });
-  } catch (err) { next(err); }
+    // We use Promise.allSettled or separate try-catches to ensure one failing table doesn't crash the whole page
+    const [binsRes, picksRes, partsRes, logsRes] = await Promise.allSettled([
+      db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]),
+      db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]),
+      db.query(`SELECT * FROM dispatch_parts WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]),
+      db.query(`SELECT al.*, u.email as operator_name FROM audit_logs al JOIN users u ON al.operator_user_id = u.id WHERE al.dispatch_id=$1 ORDER BY al.created_at ASC`, [dispatchId])
+    ]);
+
+    res.json({ 
+      dispatch, 
+      bins: binsRes.status === 'fulfilled' ? binsRes.value.rows : [], 
+      picks: picksRes.status === 'fulfilled' ? picksRes.value.rows : [], 
+      parts: partsRes.status === 'fulfilled' ? partsRes.value.rows : [], 
+      logs: logsRes.status === 'fulfilled' ? logsRes.value.rows : [] 
+    });
+  } catch (err) { 
+    next(err); 
+  }
 });
+
 
 // ---------------------------------------------------------------
 // 2. NITERA WORKFLOW (1:1)
