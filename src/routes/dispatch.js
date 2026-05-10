@@ -2,13 +2,15 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 const { permit } = require('../middleware/auth');
-const { parseBinQR, parsePickQR } = require('../utils/qrParser');
+
+// 1. ONLY USE THESE TWO PARSERS (Remove any mention of qrParser.js)
+const { parseBinQR, parsePickQR } = require('../utils/niteraParser'); 
 const { parseUsuiBin, parseUsuiPart } = require('../utils/usuiParser');
+
 const { runStrategy } = require('../utils/strategyEngine');
-const { getStrategy } = require('../strategies'); // Registry helper
+const { getStrategy } = require('../strategies');
 const { logAudit } = require('../utils/auditLogger');
-const { parseBinQR, parsePickQR } = require('../utils/niteraParser'); // Updated
-const { parseUsuiBin, parseUsuiPart } = require('../utils/usuiParser');
+
 
 // USUI: Step 1 - Scan NX
 router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
