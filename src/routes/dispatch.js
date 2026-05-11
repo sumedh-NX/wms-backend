@@ -140,34 +140,75 @@ router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (re
   } catch (err) { next(err); }
 });
 
+// ---------------------------------------------------------------
+// USUI WORKFLOW: Step 2 - Scan Bin
+// ---------------------------------------------------------------
 router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
+
   try {
+    // 1. Parse the USUI Bin QR
     const parsed = parseUsuiBin(rawQr);
     if (!parsed) return res.status(400).json({ message: 'Invalid USUI Bin QR' });
+
+    // 2. Fetch the current state of the dispatch
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
+    if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
+
+    // 3. Strategy Validation (NX match)
     const strategyQuery = `SELECT vs.code FROM validation_strategies vs JOIN customer_strategies cs ON vs.id = cs.strategy_id WHERE cs.customer_id = $1`;
     const { rows: sRows } = await db.query(strategyQuery, [dispatch.customer_id]);
+    if (sRows.length === 0) return res.status(400).json({ message: 'No strategy assigned to this customer' });
+    
     const strategyLogic = getStrategy(sRows[0].code);
     const val = strategyLogic.validateBin(dispatch.ref_product_code, parsed);
     if (!val.ok) return res.status(400).json({ message: val.message });
+
+    // 4. Duplicate Bin Check
     const { rows: dup } = await db.query(`SELECT id FROM dispatch_bins WHERE bin_number = $1 AND dispatch_id = $2`, [parsed.binNumber, dispatchId]);
     if (dup.length > 0) return res.status(409).json({ message: 'Bin already scanned' });
+
+    // 5. ATOMIC TRANSACTION
     await db.query('BEGIN');
     try {
+      // A. Insert the bin details
       const { rows: binRow } = await db.query(
         `INSERT INTO dispatch_bins (dispatch_id, bin_number, product_code, case_pack, supply_quantity, supply_date, raw_qr) 
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, 
         [dispatchId, parsed.binNumber, parsed.productCode, parsed.insidePartCount, parsed.supplyQty, parsed.supplyDate, rawQr]
       );
-      await db.query(`UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = ${Math.ceil(parsed.supplyQty/parsed.insidePartCount)} WHERE id=$1`, [dispatchId]);
+
+      // B. Update Dispatch Summary (SMG Qty and Total Batch Bins)
+      const totalBatchBins = Math.ceil(parsed.supplyQty / parsed.insidePartCount);
+      await db.query(
+        `UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = $1, updated_at=now() WHERE id=$2`, 
+        [totalBatchBins, dispatchId]
+      );
+
       await db.query('COMMIT');
-      res.json({ binId: binRow[0].id, requiredParts: parsed.insidePartCount, productCode: parsed.productCode });
-    } catch (txErr) { await db.query('ROLLBACK'); throw txErr; }
-  } catch (err) { next(err); }
+
+      // 6. FINAL STEP: Fetch the freshly updated dispatch object
+      const { rows: finalRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
+      
+      // Return both the updated dispatch (for the cards) AND the bin info (for the a-parts scan)
+      res.json({ 
+        dispatch: finalRows[0], 
+        binId: binRow[0].id, 
+        requiredParts: parsed.insidePartCount, 
+        productCode: parsed.productCode 
+      });
+
+    } catch (txErr) {
+      await db.query('ROLLBACK');
+      throw txErr;
+    }
+  } catch (err) {
+    next(err);
+  }
 });
+
 
 router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
