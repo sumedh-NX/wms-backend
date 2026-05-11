@@ -1,31 +1,48 @@
 /**
  * usuiParser.js
  * Dedicated strictly to Usui 1:Many Workflow.
+ * ZERO dependency on niteraParser or qrParser.
  */
 
+/**
+ * normalizeUsuiCode: Internal normalization for USUI only.
+ * We keep this here so changes to Nitera normalization 
+ * cannot possibly affect USUI.
+ */
 function normalizeUsuiCode(code) {
   if (!code) return '';
-  // Usui normalization: Uppercase and Trim only, 
-  // as we need to preserve identity for Product B/C checks.
-  return code.toUpperCase().trim();
+  return code
+    .toUpperCase()
+    .trim()
+    .replace(/-/g, ''); // Usui specific normalization:’ just remove dashes and uppercase
 }
 
 function parseUsuiBin(raw) {
   try {
     const t = raw.trim();
+    if (t.length < 20) return null;
+
+    // 1. Bin Number: Fixed first 13 digits
     const binNumber = t.substring(0, 13);
-    
-    const pattern = /^\d{13}\s+([A-Z0-9]+)\s+(\d+)\s+([A-Z\s,]+)/i;
-    const match = t.match(pattern);
-    if (!match) return null;
 
-    const productCode = match[1];
-    const insidePartCount = parseInt(match[2]);
-    const productName = match[3].trim();
+    // 2. Product Code & Inside Parts
+    const headMatch = t.match(/^\d{13}\s+([A-Z0-9]+)\s+(\d+)/i);
+    if (!headMatch) return null;
 
+    const productCode = headMatch[1];
+    const insidePartCount = parseInt(headMatch[2]);
+
+    // 3. Supply Quantity (The Positional Fix)
+    // Logic: Find 'D' (Invoice start), skip 12 digits of invoice, 
+    // capture all digits until we hit 'U' (Vendor code start).
+    const qtyMatch = t.match(/D\d{12}(\d+?)U\d{3}/);
+    const supplyQty = qtyMatch ? parseInt(qtyMatch[1]) : null;
+
+    if (supplyQty === null) throw new Error('Could not extract Supply Quantity');
+
+    // 4. Metadata
     const supplyDateMatch = t.match(/(\d{2}\/\d{2}\/\d{2})(?=\s*D\d{10})/);
-    const invoiceMatch = t.match(/D(\d{10,12})/);
-    const supplyQtyMatch = t.match(/(\d{2,4})(?=U\d{3})/);
+    const invoiceMatch = t.match(/D(\d{12})/);
     const vendorCodeMatch = t.match(/U(\d{3})/);
     const scheduleMatch = t.match(/U\d{3}([0-9A-Z]{10,20})/);
     const nagareMatch = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}\s*[AP]M)/i);
@@ -34,15 +51,15 @@ function parseUsuiBin(raw) {
       binNumber,
       productCode,
       insidePartCount,
-      productName,
+      supplyQty,
       supplyDate: supplyDateMatch ? supplyDateMatch[1] : null,
       invoiceNumber: invoiceMatch ? invoiceMatch[1] : null,
-      supplyQty: supplyQtyMatch ? parseInt(supplyQtyMatch[1]) : null,
       vendorCode: vendorCodeMatch ? vendorCodeMatch[1] : null,
       scheduleNumber: scheduleMatch ? scheduleMatch[1] : null,
       nagareTime: nagareMatch ? nagareMatch[1] : null,
     };
   } catch (err) {
+    console.error("USUI Bin Parsing Error:", err);
     return null;
   }
 }
@@ -50,7 +67,7 @@ function parseUsuiBin(raw) {
 function parseUsuiPart(raw) {
   return {
     raw: raw.trim(),
-    normalized: normalizeUsuiCode(raw.trim())
+    normalized: normalizeUsuiCode(raw.trim()) // Uses the local isolated function
   };
 }
 
