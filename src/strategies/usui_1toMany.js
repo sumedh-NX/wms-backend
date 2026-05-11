@@ -4,10 +4,30 @@ module.exports = {
   name: 'Usui 1:Many Validation',
 
   validateNX: (nxCode) => {
-    if (!nxCode || nxCode.trim().length < 5) {
-      return { ok: false, message: 'Invalid NX QR Code' };
+    if (!nxCode) return { ok: false, message: 'NX QR Code is empty' };
+    
+    const trimmedCode = nxCode.trim();
+
+    // 1. REJECT if it looks like a Bin QR (Starts with 13 digits)
+    if (/^\d{13}/.test(trimmedCode)) {
+      return { ok: false, message: 'Invalid Scan: You scanned a Bin QR, but an NX Product QR is required here.' };
     }
-    return { ok: true, productCode: normalizeUsuiCode(nxCode) };
+
+    // 2. REJECT if it's too long (Product codes are usually 10-20 chars, Bin QRs are 100+)
+    if (trimmedCode.length > 30) {
+      return { ok: false, message: 'Invalid Scan: This code is too long to be a Product NX code.' };
+    }
+
+    // 3. REJECT if it's too short
+    if (trimmedCode.length < 5) {
+      return { ok: false, message: 'Invalid NX QR Code: Code is too short.' };
+    }
+
+    // If it passes these guards, it's likely a real Product Code
+    return { 
+      ok: true, 
+      productCode: normalizeUsuiCode(trimmedCode) 
+    };
   },
 
   validateBin: (nxProductCode, parsedBin) => {
