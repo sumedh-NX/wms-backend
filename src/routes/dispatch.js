@@ -9,7 +9,7 @@ const { getStrategy } = require('../strategies');
 const { logAudit } = require('../utils/auditLogger');
 
 // ===============================================================================
-// SECTION 1: CORE MANAGEMENT (Shared by both)
+// SECTION 1: CORE MANAGEMENT
 // ===============================================================================
 
 router.get('/', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
@@ -43,7 +43,6 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
     if (dispatchRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dispatchRows[0];
     
-    // Optimized: Fetch all related data in parallel
     const [bins, picks, parts, logs] = await Promise.all([
       db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]).then(r => r.rows),
       db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]).then(r => r.rows),
@@ -56,7 +55,7 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
 });
 
 // ===============================================================================
-// SECTION 2: NITERA PIPELINE (Siloed)
+// SECTION 2: NITERA PIPELINE
 // ===============================================================================
 
 router.post('/:id/scan-bin', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
@@ -123,10 +122,7 @@ router.post('/:id/scan-pick', permit('operator', 'supervisor', 'admin'), async (
 // SECTION 3: USUI PIPELINE (Siloed)
 // ===============================================================================
 
-// ... (imports remain the same)
-
-// USUI: Step 1 - Scan NX
-router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
+router.post('/: la- la /:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
@@ -135,62 +131,42 @@ router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (re
     const strategyQuery = `SELECT vs.code FROM validation_strategies vs JOIN customer_strategies cs ON vs.id = cs.strategy_id WHERE cs.customer_id = $1`;
     const { rows: sRows } = await db.query(strategyQuery, [dispatch.customer_id]);
     const strategyLogic = getStrategy(sRows[0]?.code);
-    
     const val = strategyLogic.validateNX(rawQr);
     if (!val.ok) return res.status(400).json({ message: val.message });
-
-    // Update and return the full dispatch object to fix the UI lag
-    const { rows: updated } = await db.query(
-      `UPDATE dispatches SET ref_product_code = $1, updated_at=now() WHERE id=$2 RETURNING *`, 
-      [val.productCode, dispatchId]
-    );
+    const { rows: updated } = await db.query(`UPDATE dispatches SET ref_product_code = $1, updated_at=now() WHERE id=$2 RETURNING *`, [val.productCode, dispatchId]);
     res.json({ dispatch: updated[0], productCode: val.productCode });
   } catch (err) { next(err); }
 });
 
-// USUI: Step 2 - Scan Bin
 router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
     const parsed = parseUsuiBin(rawQr);
     if (!parsed) return res.status(400).json({ message: 'Invalid USUI Bin QR' });
-
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     const dispatch = dRows[0];
     const strategyQuery = `SELECT vs.code FROM validation_strategies vs JOIN customer_strategies cs ON vs.id = cs.strategy_id WHERE cs.customer_id = $1`;
     const { rows: sRows } = await db.query(strategyQuery, [dispatch.customer_id]);
     const strategyLogic = getStrategy(sRows[0]?.code);
-    
     const val = strategyLogic.validateBin(dispatch.ref_product_code, parsed);
     if (!val.ok) return res.status(400).json({ message: val.message });
-
     const { rows: dup } = await db.query(`SELECT id FROM dispatch_bins WHERE bin_number = $1 AND dispatch_id = $2`, [parsed.binNumber, dispatchId]);
     if (dup.length > 0) return res.status(409).json({ message: 'Bin already scanned' });
-
     await db.query('BEGIN');
     try {
-      // FIX: Explicitly map insidePartCount to case_pack to stop the NULL error
       const { rows: binRow } = await db.query(
         `INSERT INTO dispatch_bins (dispatch_id, bin_number, product_code, case_pack, supply_quantity, supply_date, raw_qr) 
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, 
         [dispatchId, parsed.binNumber, parsed.productCode, parsed.insidePartCount, parsed.supplyQty, parsed.supplyDate, rawQr]
       );
-      
       const totalBatchBins = Math.ceil(parsed.supplyQty / parsed.insidePartCount);
-      const { rows: finalRows } = await db.query(
-        `UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = $1, updated_at=now() WHERE id=$2 RETURNING *`, 
-        [totalBatchBins, dispatchId]
-      );
-
+      const { rows: finalRows } = await db.query(`UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = $1, updated_at=now() WHERE id=$2 RETURNING *`, [totalBatchBins, dispatchId]);
       await db.query('COMMIT');
       res.json({ dispatch: finalRows[0], binId: binRow[0].id, requiredParts: parsed.insidePartCount });
     } catch (txErr) { await db.query('ROLLBACK'); throw txErr; }
   } catch (err) { next(err); }
 });
-
-// ... keep /scan-part as previously provided ...
-
 
 router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
@@ -200,13 +176,37 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     const dispatch = dRows[0];
     const strategyQuery = `SELECT vs.code FROM validation_strategies vs JOIN customer_strategies cs ON vs.id = cs.strategy_id WHERE cs.customer_id = $1`;
-    const { rows: sRows } = await db.query(strategyQuery, [dispatch.customer_id]);
+    const { rows: sRows } = await db.query(strategyQueryL, [dispatch.customer_id]);
     const strategyLogic = getStrategy(sRows[0].code);
     const val = await strategyLogic.validatePart(dispatch.ref_product_code, parsedPart.normalized, dispatchId, binId, db);
     if (!val.ok) return res.status(400).json({ message: val.message });
-    await db.query(`INSERT INTO dispatch_parts (dispatch_id, bin_id, part_code, raw_qr) VALUES ($1,$2,$3,$4)`, [dispatchId, binId, parsedPart.normalized, rawQr]);
-    const { rows: countRows } = await db.query(`SELECT count(*) as total FROM dispatch_parts WHERE bin_id = $1`, [binId]);
-    res.json({ count: parseInt(countRows[0].total), partCode: parsedPart.normalized });
+
+    await db.query('BEGIN');
+    try {
+      await db.query(`INSERT INTO dispatch_parts (dispatch_id, bin_id, part_code, raw_qr) VALUES ($1,$2,$3,$4)`, [dispatchId, binId, parsedPart.normalized, rawQr]);
+      
+      // REAL-TIME COMPLETION CHECK
+      const { rows: partsCount } = await db.query(`SELECT count(*) as total FROM dispatch_parts WHERE dispatch_id = $1`, [dispatchId]);
+      const totalScanned = parseInt(partsCount[0].total);
+      
+      // Expected Total = Bins * PartsPerBin (Ref Case Pack)
+      const expectedTotal = dispatch.total_schedule_bins * dispatch.ref_case_pack;
+
+      if (totalScanned >= expectedTotal) {
+        await db.query(`UPDATE dispatches SET status = 'COMPLETED', updated_at=now() WHERE id = $1`, [dispatchId]);
+      }
+      
+      await db.query('COMMIT');
+      const { rows: finalRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
+      
+      const { rows: binCount } = await db.query(`SELECT count(*) as total FROM dispatch_parts WHERE bin_id = $1`, [binId]);
+      
+      res.json({ 
+        count: parseInt(binCount[0].total), 
+        partCode: parsedPart.normalized,
+        dispatch: finalRows[0] // Return updated dispatch status
+      });
+    } catch (txErr) { await db.query('ROLLBACK'); throw txErr; }
   } catch (err) { next(err); }
 });
 
