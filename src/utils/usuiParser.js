@@ -35,7 +35,7 @@ function parseUsuiBin(raw) {
     // 3. Supply Quantity (The Positional Fix)
     // Logic: Find 'D' (Invoice start), skip 12 digits of invoice, 
     // capture all digits until we hit 'U' (Vendor code start).
-    const qtyMatch = t.match(/D\d{12}(\d+?)U\d{3}/);
+    const qtyMatch = t.match(/D\d{13}(\d+?)U\d{3}/);
     const supplyQty = qtyMatch ? parseInt(qtyMatch[1]) : null;
 
     if (supplyQty === null) throw new Error('Could not extract Supply Quantity');

@@ -176,7 +176,7 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     const dispatch = dRows[0];
     const strategyQuery = `SELECT vs.code FROM validation_strategies vs JOIN customer_strategies cs ON vs.id = cs.strategy_id WHERE cs.customer_id = $1`;
-    const { rows: sRows } = await db.query(strategyQueryL, [dispatch.customer_id]);
+    const { rows: sRows } = await db.query(strategyQuery, [dispatch.customer_id]);
     const strategyLogic = getStrategy(sRows[0].code);
     const val = await strategyLogic.validatePart(dispatch.ref_product_code, parsedPart.normalized, dispatchId, binId, db);
     if (!val.ok) return res.status(400).json({ message: val.message });
