@@ -122,7 +122,7 @@ router.post('/:id/scan-pick', permit('operator', 'supervisor', 'admin'), async (
 // SECTION 3: USUI PIPELINE (Siloed)
 // ===============================================================================
 
-router.post('/: la- la /:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
+router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
   try {
