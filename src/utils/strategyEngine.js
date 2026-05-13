@@ -1,31 +1,44 @@
+/**
+ * strategyEngine.js
+ * Pure execution logic. No caching, no DB management.
+ */
+
 const db = require('../config/db');
 const { getStrategy } = require('../strategies');
+const cache = require('./strategyCache');
 
-// In-memory cache for performance: { "customerId": "STRATEGY_CODE" }
-const strategyCache = new Map();
+/**
+ * Resolves the strategy code for a customer.
+ * Uses cache-first lookup, falls back to DB.
+ */
+async function resolveStrategyCode(customerId) {
+  let strategyCode = cache.get(customerId);
+  
+  if (!strategyCode) {
+    const { rows } = await db.query(
+      `SELECT vs.code FROM validation_strategies vs
+       JOIN customer_strategies cs ON vs.id = cs.strategy_id
+       WHERE cs.customer_id = $1`,
+      [customerId]
+    );
+    
+    if (rows.length > 0) {
+      strategyCode = rows[0].code;
+      cache.set(customerId, strategyCode);
+    }
+  }
+  
+  return strategyCode;
+}
 
+/**
+ * Generic strategy executor.
+ * Used by Nitera workflow (BIN_LABEL, PICKLIST validation).
+ */
 async function runStrategy(dispatch, parsed, type) {
   try {
-    const customerId = dispatch.customer_id;
-    let strategyCode = strategyCache.get(customerId);
-
-    // 1. If not in cache, fetch from DB
-    if (!strategyCode) {
-      const strategyQuery = `
-        SELECT vs.code 
-        FROM validation_strategies vs
-        JOIN customer_strategies cs ON vs.id = cs.strategy_id
-        WHERE cs.customer_id = $1
-      `;
-      const { rows } = await db.query(strategyQuery, [customerId]);
-      
-      if (rows.length > 0) {
-        strategyCode = rows[0].code;
-        strategyCache.set(customerId, strategyCode);
-      }
-    }
-
-    // 2. STRICT MODE: If no strategy is assigned, BLOCK the scan
+    const strategyCode = await resolveStrategyCode(dispatch.customer_id);
+    
     if (!strategyCode) {
       return { 
         ok: false, 
@@ -33,16 +46,10 @@ async function runStrategy(dispatch, parsed, type) {
       };
     }
 
-    // 3. Load logic from Registry
     const strategyLogic = getStrategy(strategyCode);
 
-    // 4. Execute Pure Logic
-    if (type === 'BIN_LABEL') {
-      return strategyLogic.validateBin(dispatch, parsed);
-    } 
-    if (type === 'PICKLIST') {
-      return strategyLogic.validatePick(dispatch, parsed);
-    }
+    if (type === 'BIN_LABEL') return strategyLogic.validateBin(dispatch, parsed);
+    if (type === 'PICKLIST') return strategyLogic.validatePick(dispatch, parsed);
 
     return { ok: false, message: 'Unknown scan type' };
   } catch (err) {
@@ -51,13 +58,8 @@ async function runStrategy(dispatch, parsed, type) {
   }
 }
 
-// Helper to clear cache when admin changes assignment
-function clearStrategyCache(customerId) {
-  if (customerId) {
-    strategyCache.delete(customerId);
-  } else {
-    strategyCache.clear();
-  }
-}
-
-module.exports = { runStrategy, clearStrategyCache };
+module.exports = { 
+  runStrategy, 
+  resolveStrategyCode,
+  clearStrategyCache: cache.clear  // Re-export for admin convenience
+};

@@ -8,6 +8,8 @@ const adminRoutes = require('./routes/admin');
 const { errorHandler } = require('./middleware/error');
 const setupRoutes = require('./routes/setup');
 const { verifyToken } = require('./middleware/auth');
+const niteraRoutes = require('./routes/nitera_1to1');
+const usuiRoutes = require('./routes/usui_1toMany');
 
 const app = express();
 
@@ -24,7 +26,10 @@ app.use('/api', verifyToken);
 
 // Role-based groups (all these now require verifyToken)
 app.use('/api/customers', customerRoutes);
-app.use('/api/dispatch', dispatchRoutes); // Singular
+// Mount in this order: specific workflows FIRST, generic routes LAST
+app.use('/api/dispatch', niteraRoutes);
+app.use('/api/dispatch', usuiRoutes);
+app.use('/api/dispatch', dispatchRoutes);
 app.use('/api/admin', adminRoutes);       // Merged User & Strategy management
 
 // Global error handler
