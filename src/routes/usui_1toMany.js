@@ -95,17 +95,28 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       const totalBatchBins = Math.ceil(parsed.supplyQty / parsed.insidePartCount);
       
       // Set ref_case_pack on first bin (needed for completion check)
-      const updateQuery = !dispatch.ref_case_pack 
-        ? `UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = $1, 
-           ref_case_pack = $2, updated_at=now() WHERE id=$3 RETURNING *`
-        : `UPDATE dispatches SET smg_qty = smg_qty + 1, total_schedule_bins = $1, 
-           updated_at=now() WHERE id=$3 RETURNING *`;
-      
-      const updateParams = !dispatch.ref_case_pack
-        ? [totalBatchBins, parsed.insidePartCount, dispatchId]
-        : [totalBatchBins, null, dispatchId];
-      
-      const { rows: finalRows } = await db.query(updateQuery, updateParams);
+      // Set ref_case_pack on first bin (needed for completion check)
+      let finalRows;
+
+      if (!dispatch.ref_case_pack) {
+        // First bin: set ref_case_pack (3 parameters)
+        const result = await db.query(
+          `UPDATE dispatches SET smg_qty = smg_qty + 1, 
+          total_schedule_bins = $1, ref_case_pack = $2, 
+          updated_at=now() WHERE id=$3 RETURNING *`,
+          [totalBatchBins, parsed.insidePartCount, dispatchId]
+        );
+        finalRows = result.rows;
+      } else {
+        // Subsequent bins: don't touch ref_case_pack (2 parameters)
+        const result = await db.query(
+          `UPDATE dispatches SET smg_qty = smg_qty + 1, 
+          total_schedule_bins = $1, updated_at=now() 
+          WHERE id=$2 RETURNING *`,
+          [totalBatchBins, dispatchId]
+        );
+        finalRows = result.rows;
+      }
       
       await db.query('COMMIT');
       

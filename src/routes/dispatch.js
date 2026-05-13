@@ -40,6 +40,7 @@ router.post('/', permit('operator', 'supervisor', 'admin'), async (req, res, nex
 });
 
 // GET /api/dispatch/:id - Get full dispatch details
+// GET /api/dispatch/:id - Get full dispatch details (INCLUDES STRATEGY CODE)
 router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   try {
     const dispatchId = req.params.id;
@@ -48,7 +49,8 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
     if (dispatchRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dispatchRows[0];
     
-    const [bins, picks, parts, logs] = await Promise.all([
+    // Fetch all related data including the strategy code
+    const [bins, picks, parts, logs, strategyRows] = await Promise.all([
       db.query(`SELECT * FROM dispatch_bins WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]).then(r => r.rows),
       db.query(`SELECT * FROM dispatch_picks WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]).then(r => r.rows),
       db.query(`SELECT * FROM dispatch_parts WHERE dispatch_id=$1 ORDER BY created_at`, [dispatchId]).then(r => r.rows),
@@ -57,10 +59,23 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
          JOIN users u ON al.operator_user_id = u.id 
          WHERE al.dispatch_id=$1 ORDER BY al.created_at ASC`, 
         [dispatchId]
+      ).then(r => r.rows),
+      // NEW: Fetch the strategy code for this customer
+      db.query(
+        `SELECT vs.code FROM validation_strategies vs
+         JOIN customer_strategies cs ON vs.id = cs.strategy_id
+         WHERE cs.customer_id = $1`,
+        [dispatch.customer_id]
       ).then(r => r.rows)
     ]);
     
-    res.json({ dispatch, bins, picks, parts, logs });
+    // Attach strategy_code to the dispatch object
+    const strategyCode = strategyRows.length > 0 ? strategyRows[0].code : null;
+    
+    res.json({ 
+      dispatch: { ...dispatch, strategy_code: strategyCode }, 
+      bins, picks, parts, logs 
+    });
   } catch (err) { next(err); }
 });
 

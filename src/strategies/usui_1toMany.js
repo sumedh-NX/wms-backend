@@ -39,27 +39,46 @@ module.exports = {
   },
 
   validatePart: async (productCode, partCode, dispatchId, binId, db) => {
-    const normProduct = normalizeUsuiCode(productCode);
-    const normPart = normalizeUsuiCode(partCode);
+  const normProduct = normalizeUsuiCode(productCode);
+  const normPart = normalizeUsuiCode(partCode);
 
-    // PRODUCT A: 15730M54T00 (Count Only, No Dup Check)
-    const isProductA = normProduct === normalizeUsuiCode('15730M54T00');
-    
-    if (!isProductA) {
-      // Product B or C: Must contain the main product code
-      if (!normPart.includes(normProduct)) {
-        return { ok: false, message: 'Part code does not match Product identity' };
-      }
-      // Global Duplicate Check
-      const { rows } = await db.query(
-        `SELECT id FROM dispatch_parts WHERE part_code = $1 AND dispatch_id = $2`,
-        [normPart, dispatchId]
-      );
-      if (rows.length > 0) {
-        return { ok: false, message: 'This Part has already been scanned in this dispatch' };
-      }
+  // PRODUCT A: 15730M54T00 (Count Only, No Match, No Dup Check)
+  const isProductA = normProduct === normalizeUsuiCode('15730M54T00');
+  
+  if (!isProductA) {
+    // RULE 1: Reject if part QR is identical to the product code
+    if (normPart === normProduct) {
+      return { ok: false, message: 'Invalid: This is the master Product QR, not an inside Part QR' };
     }
-
-    return { ok: true };
+    
+    // RULE 2: Part must contain the product code
+    if (!normPart.includes(normProduct)) {
+      return { ok: false, message: 'Part code does not match Product identity' };
+    }
+    
+    // RULE 3: Part must have data BOTH before AND after the product code
+    const productIndex = normPart.indexOf(normProduct);
+    const hasDataBefore = productIndex > 0;
+    const hasDataAfter = (productIndex + normProduct.length) < normPart.length;
+    
+    if (!hasDataBefore) {
+      return { ok: false, message: 'Invalid Part QR: missing prefix data (e.g., vendor code)' };
+    }
+    
+    if (!hasDataAfter) {
+      return { ok: false, message: 'Invalid Part QR: missing suffix data (e.g., serial/date)' };
+    }
+    
+    // RULE 4: Global Duplicate Check across the dispatch
+    const { rows } = await db.query(
+      `SELECT id FROM dispatch_parts WHERE part_code = $1 AND dispatch_id = $2`,
+      [normPart, dispatchId]
+    );
+    if (rows.length > 0) {
+      return { ok: false, message: 'This Part has already been scanned in this dispatch' };
+    }
   }
+
+  return { ok: true };
+}
 };
