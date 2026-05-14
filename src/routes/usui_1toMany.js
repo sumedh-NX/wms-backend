@@ -41,13 +41,16 @@ router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (re
       [val.productCode, dispatchId]
     );
     
-    logAudit({ 
-      dispatchId, type: 'NX_QR', code: val.productCode, 
-      product_code: val.productCode, result: 'PASS', 
-      operator_user_id: req.user.id, raw_qr: rawQr 
-    }).catch(console.error);
-    
-    res.json({ dispatch: updated[0], productCode: val.productCode });
+  logAudit({ 
+    dispatchId, type: 'NX_QR', 
+    code: val.productCode, 
+    product_code: val.productCode, 
+    result: 'PASS', 
+    operator_user_id: req.user.id, 
+    raw_qr: rawQr 
+  }).catch(console.error);
+
+  res.json({ dispatch: updated[0], productCode: val.productCode });
   } catch (err) { next(err); }
 });
 
@@ -61,6 +64,7 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
     if (!parsed) return res.status(400).json({ message: 'Invalid USUI Bin QR' });
     
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
+    if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
     
     const strategyCode = await resolveStrategyCode(dispatch.customer_id);
@@ -97,8 +101,9 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       // Set ref_case_pack on first bin (needed for completion check)
       // Set ref_case_pack on first bin (needed for completion check)
       let finalRows;
+      
       if (!dispatch.ref_case_pack) {
-        // First bin: save ALL reference fields including Nagare Time and Supply Date
+        // First bin: save ALL reference fields including supply_quantity
         const result = await db.query(
           `UPDATE dispatches SET 
           smg_qty = smg_qty + 1, 
@@ -107,20 +112,22 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
           ref_schedule_number = $3,
           ref_supply_date = $4,
           ref_schedule_sent_date = $5,
+          supply_quantity = $6,
           updated_at = now() 
-          WHERE id = $6 RETURNING *`,
+          WHERE id = $7 RETURNING *`,
           [
             totalBatchBins, 
             parsed.insidePartCount, 
             parsed.scheduleNumber,
-            parsed.nagareTime,      // Nagare Time = full datetime (06/05/2026 08:30 AM)
-            parsed.supplyDate,      // Supply Date = short date (05/05/26)
+            parsed.nagareTime,
+            parsed.supplyDate,
+            parsed.supplyQty,
             dispatchId
           ]
         );
         finalRows = result.rows;
-      }else {
-        // Subsequent bins: only update quantity (ref values are locked)
+      } else {
+        // Subsequent bins: only update quantity
         const result = await db.query(
           `UPDATE dispatches SET 
           smg_qty = smg_qty + 1, 
@@ -160,6 +167,7 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
   try {
     const parsedPart = parseUsuiPart(rawQr);
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
+    if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
     
     const strategyCode = await resolveStrategyCode(dispatch.customer_id);
