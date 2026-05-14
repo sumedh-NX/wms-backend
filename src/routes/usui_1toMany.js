@@ -66,7 +66,7 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
     const strategyCode = await resolveStrategyCode(dispatch.customer_id);
     const strategyLogic = getStrategy(strategyCode);
     
-    const val = strategyLogic.validateBin(dispatch.ref_product_code, parsed);
+    const val = strategyLogic.validateBin(dispatch.ref_product_code, parsed, dispatch);
     if (!val.ok) {
       logAudit({ 
         dispatchId, type: 'BIN_LABEL', code: parsed.binNumber, 
@@ -99,20 +99,26 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       let finalRows;
 
       if (!dispatch.ref_case_pack) {
-        // First bin: set ref_case_pack (3 parameters)
+        // First bin: save ref_case_pack AND ref_schedule_number as reference
         const result = await db.query(
-          `UPDATE dispatches SET smg_qty = smg_qty + 1, 
-          total_schedule_bins = $1, ref_case_pack = $2, 
-          updated_at=now() WHERE id=$3 RETURNING *`,
-          [totalBatchBins, parsed.insidePartCount, dispatchId]
+          `UPDATE dispatches SET 
+          smg_qty = smg_qty + 1, 
+          total_schedule_bins = $1, 
+          ref_case_pack = $2,
+          ref_schedule_number = $3,
+          updated_at = now() 
+          WHERE id = $4 RETURNING *`,
+          [totalBatchBins, parsed.insidePartCount, parsed.scheduleNumber, dispatchId]
         );
         finalRows = result.rows;
       } else {
-        // Subsequent bins: don't touch ref_case_pack (2 parameters)
+        // Subsequent bins: only update quantity (ref values are locked)
         const result = await db.query(
-          `UPDATE dispatches SET smg_qty = smg_qty + 1, 
-          total_schedule_bins = $1, updated_at=now() 
-          WHERE id=$2 RETURNING *`,
+          `UPDATE dispatches SET 
+          smg_qty = smg_qty + 1, 
+          total_schedule_bins = $1, 
+          updated_at = now() 
+          WHERE id = $2 RETURNING *`,
           [totalBatchBins, dispatchId]
         );
         finalRows = result.rows;

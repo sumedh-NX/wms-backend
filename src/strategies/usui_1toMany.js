@@ -30,13 +30,43 @@ module.exports = {
     };
   },
 
-  validateBin: (nxProductCode, parsedBin) => {
-    if (!nxProductCode) return { ok: false, message: 'NX Product not identified. Scan NX QR first.' };
-    if (normalizeUsuiCode(parsedBin.productCode) !== normalizeUsuiCode(nxProductCode)) {
-      return { ok: false, message: `Bin Product (${parsedBin.productCode}) does not match NX Product` };
+  validateBin: (nxProductCode, parsedBin, dispatch) => {
+  // GATE 1: NX Product must be identified first
+  if (!nxProductCode) {
+    return { 
+      ok: false, 
+      message: 'NX Product not identified. Scan NX QR first.' 
+    };
+  }
+
+  // GATE 2: Bin Product Code must match NX Product Code
+  if (normalizeUsuiCode(parsedBin.productCode) !== normalizeUsuiCode(nxProductCode)) {
+    return { 
+      ok: false, 
+      message: `Bin Product (${parsedBin.productCode}) does not match NX Product (${nxProductCode})` 
+    };
+  }
+
+  // GATE 3: Schedule No validation between bins
+  // If a reference schedule number is already set (i.e., not the first bin),
+  // the new bin's schedule number must match exactly.
+  if (dispatch.ref_schedule_number) {
+    if (!parsedBin.scheduleNumber) {
+      return { 
+        ok: false, 
+        message: 'Could not extract Schedule No from Bin QR. Please check the label.' 
+      };
     }
-    return { ok: true };
-  },
+    if (parsedBin.scheduleNumber.trim() !== dispatch.ref_schedule_number.trim()) {
+      return { 
+        ok: false, 
+        message: `Schedule No mismatch: Bin has (${parsedBin.scheduleNumber}) but dispatch reference is (${dispatch.ref_schedule_number})` 
+      };
+    }
+  }
+
+  return { ok: true };
+},
 
   validatePart: async (productCode, partCode, dispatchId, binId, db) => {
   const normProduct = normalizeUsuiCode(productCode);
