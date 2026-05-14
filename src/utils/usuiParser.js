@@ -45,7 +45,7 @@ function parseUsuiBin(raw) {
     const invoiceMatch = t.match(/D(\d{12})/);
     const vendorCodeMatch = t.match(/U(\d{3})/);
     const scheduleMatch = t.match(/U\d{3}([0-9A-Z]+)(?=PE-\d)/i);
-    const nagareMatch = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}\s*[AP]M)(?=[^a-zA-Z]|$)/i);
+    const nagareMatch = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}\s*[AP]M)(?=[^a-z])/);;
 
     return {
       binNumber,

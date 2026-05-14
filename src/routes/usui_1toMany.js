@@ -97,21 +97,29 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       // Set ref_case_pack on first bin (needed for completion check)
       // Set ref_case_pack on first bin (needed for completion check)
       let finalRows;
-
       if (!dispatch.ref_case_pack) {
-        // First bin: save ref_case_pack AND ref_schedule_number as reference
+        // First bin: save ALL reference fields including Nagare Time and Supply Date
         const result = await db.query(
           `UPDATE dispatches SET 
           smg_qty = smg_qty + 1, 
           total_schedule_bins = $1, 
           ref_case_pack = $2,
           ref_schedule_number = $3,
+          ref_supply_date = $4,
+          ref_schedule_sent_date = $5,
           updated_at = now() 
-          WHERE id = $4 RETURNING *`,
-          [totalBatchBins, parsed.insidePartCount, parsed.scheduleNumber, dispatchId]
+          WHERE id = $6 RETURNING *`,
+          [
+            totalBatchBins, 
+            parsed.insidePartCount, 
+            parsed.scheduleNumber,
+            parsed.nagareTime,      // Nagare Time = full datetime (06/05/2026 08:30 AM)
+            parsed.supplyDate,      // Supply Date = short date (05/05/26)
+            dispatchId
+          ]
         );
         finalRows = result.rows;
-      } else {
+      }else {
         // Subsequent bins: only update quantity (ref values are locked)
         const result = await db.query(
           `UPDATE dispatches SET 
