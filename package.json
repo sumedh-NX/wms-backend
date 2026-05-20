@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "postinstall": "chmod +x node_modules/.bin/node-pg-migrate",
+    
     "migrate": "npx node-pg-migrate up -c src/config/db.js"
   },
   "dependencies": {
