@@ -16,9 +16,10 @@ router.get('/', permit('operator', 'supervisor', 'admin'), async (req, res, next
     let query = `SELECT * FROM dispatches WHERE customer_id = $1`;
     let params = [customerId];
     
+    // FIXED: Use ::date cast instead of ::timestamp for timezone-safe filtering
     if (startDate && endDate) {
-      query += ` AND created_at >= $2::timestamp AND created_at <= $3::timestamp`;
-      params.push(`${startDate} 00:00:00`, `${endDate} 23:59:59`);
+      query += ` AND created_at::date >= $2::date AND created_at::date <= $3::date`;
+      params.push(startDate, endDate);
     }
     
     query += ` ORDER BY created_at DESC`;
@@ -39,7 +40,6 @@ router.post('/', permit('operator', 'supervisor', 'admin'), async (req, res, nex
   } catch (err) { next(err); }
 });
 
-// GET /api/dispatch/:id - Get full dispatch details
 // GET /api/dispatch/:id - Get full dispatch details (INCLUDES STRATEGY CODE)
 router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   try {
@@ -60,7 +60,7 @@ router.get('/:id', permit('operator', 'supervisor', 'admin'), async (req, res, n
          WHERE al.dispatch_id=$1 ORDER BY al.created_at ASC`, 
         [dispatchId]
       ).then(r => r.rows),
-      // NEW: Fetch the strategy code for this customer
+      // Fetch the strategy code for this customer
       db.query(
         `SELECT vs.code FROM validation_strategies vs
          JOIN customer_strategies cs ON vs.id = cs.strategy_id
@@ -89,8 +89,13 @@ router.post('/:id/complete', permit('operator', 'supervisor', 'admin'), async (r
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
     
+    // Check if already completed
+    if (dispatch.status === 'COMPLETED') {
+      return res.status(400).json({ message: 'Dispatch is already completed' });
+    }
+    
     // Validate completion based on workflow type
-    // Check if it's Usui by looking at dispatch_parts
+    // Check if it's USUI by looking at dispatch_parts
     const { rows: partsRows } = await db.query(
       `SELECT count(*) as total FROM dispatch_parts WHERE dispatch_id = $1`, 
       [dispatchId]
@@ -116,7 +121,7 @@ router.post('/:id/complete', permit('operator', 'supervisor', 'admin'), async (r
     }
     
     await db.query(`UPDATE dispatches SET status='COMPLETED', updated_at=now() WHERE id=$1`, [dispatchId]);
-    res.json({ message: 'Dispatch completed' });
+    res.json({ message: 'Dispatch completed successfully' });
   } catch (err) { next(err); }
 });
 
