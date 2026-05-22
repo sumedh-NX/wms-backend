@@ -58,11 +58,22 @@ router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (re
 router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
-  let parsed; // declared outside try so the catch block can access it for audit logging
+  let parsed;
 
   try {
     parsed = parseUsuiBin(rawQr);
-    if (!parsed) return res.status(400).json({ message: 'Invalid USUI Bin QR' });
+    if (!parsed) {
+      logAudit({
+        dispatchId, type: 'BIN_LABEL',
+        code: rawQr.substring(0, 50),
+        product_code: null,
+        result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Invalid USUI Bin QR',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message: 'Invalid USUI Bin QR' });
+    }
 
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
@@ -161,10 +172,23 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
 router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr, binId } = req.body;
-  let parsedPart; // declared outside try so the catch block can access it for audit logging
+  let parsedPart;
 
   try {
     parsedPart = parseUsuiPart(rawQr);
+    if (!parsedPart) {
+      logAudit({
+        dispatchId, type: 'PART',
+        code: rawQr.substring(0, 50),
+        product_code: null,
+        result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Invalid USUI Part QR',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message: 'Invalid USUI Part QR' });
+    }
+
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];

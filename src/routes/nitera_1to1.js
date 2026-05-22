@@ -14,11 +14,22 @@ const { logAudit } = require('../utils/auditLogger');
 router.post('/:id/scan-bin', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
-  let parsed; // declared outside try so the catch block can access it for audit logging
+  let parsed;
 
   try {
     parsed = parseBinQR(rawQr);
-    if (!parsed) return res.status(400).json({ message: 'Invalid Nitera Bin QR' });
+    if (!parsed) {
+      logAudit({
+        dispatchId, type: 'BIN_LABEL',
+        code: rawQr.substring(0, 50),
+        product_code: null,
+        result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Invalid Nitera Bin QR',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message: 'Invalid Nitera Bin QR' });
+    }
 
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     const dispatch = dRows[0];
@@ -96,11 +107,22 @@ router.post('/:id/scan-bin', permit('operator', 'supervisor', 'admin'), async (r
 router.post('/:id/scan-pick', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
   const { rawQr } = req.body;
-  let parsed; // declared outside try so the catch block can access it for audit logging
+  let parsed;
 
   try {
     parsed = parsePickQR(rawQr);
-    if (!parsed) return res.status(400).json({ message: 'Invalid Nitera Pick QR' });
+    if (!parsed) {
+      logAudit({
+        dispatchId, type: 'PICKLIST',
+        code: rawQr.substring(0, 50),
+        product_code: null,
+        result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Invalid Nitera Pick QR',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message: 'Invalid Nitera Pick QR' });
+    }
 
     const { rows: dRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
     const dispatch = dRows[0];
