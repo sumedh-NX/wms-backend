@@ -1,17 +1,16 @@
-const nitera1to1 = require('./nitera_1to1');
-const usui1toMany = require('./usui_1toMany');
+const CUSTOMER_REGISTRY = require('../customers/registry');
 
-const STRATEGY_REGISTRY = {
-  'NITERA_1to1': nitera1to1,
-  'USUI_1toMany': usui1toMany,
-};
+const STRATEGY_MAP = {};
+for (const customer of CUSTOMER_REGISTRY) {
+  STRATEGY_MAP[customer.strategyCode] = customer.strategy;
+}
 
 module.exports = {
   getStrategy: (code) => {
-    const strategy = STRATEGY_REGISTRY[code];
+    const strategy = STRATEGY_MAP[code];
     if (!strategy) {
-      throw new Error(`Strategy code ${code} not found in registry.`);
+      throw new Error(`Strategy code "${code}" not found in registry.`);
     }
     return strategy;
-  }
+  },
 };
