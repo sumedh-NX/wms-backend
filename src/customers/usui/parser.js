@@ -19,7 +19,8 @@ function parseUsuiBin(raw) {
     const productCode     = headMatch[1];
     const insidePartCount = parseInt(headMatch[2]);
 
-    const qtyMatch = t.match(/D\d{12}(\d+?)U\d{3}/);
+    // Allow optional whitespace between fields — MT90/BT scanners may emit newlines here
+    const qtyMatch = t.match(/D\d{12}\s*(\d+)\s*U\d{3}/);
     const supplyQty = qtyMatch ? parseInt(qtyMatch[1]) : null;
 
     if (supplyQty === null) throw new Error('Could not extract Supply Quantity');

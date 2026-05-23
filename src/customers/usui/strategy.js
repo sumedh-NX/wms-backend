@@ -50,7 +50,17 @@ module.exports = {
 
     const isProductA = normProduct === normalizeUsuiCode('15730M54T00');
 
-    if (!isProductA) {
+    if (isProductA) {
+      // Count-only product: no product-code embedding check, but still block cross-product scans.
+      // Valid part codes for this product are short serials like "03C2802260204" (<=20 chars).
+      // Reject codes that embed another USUI product code (e.g. U164A15730M75T10...).
+      if (normPart.includes('15730M')) {
+        return { ok: false, message: 'Invalid Part QR: This code belongs to a different product' };
+      }
+      if (normPart.length > 20) {
+        return { ok: false, message: 'Invalid Part QR: Code is too long for this product type' };
+      }
+    } else {
       if (normPart === normProduct) {
         return { ok: false, message: 'Invalid: This is the master Product QR, not an inside Part QR' };
       }
