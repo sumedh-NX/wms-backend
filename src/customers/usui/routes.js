@@ -88,21 +88,7 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       return res.status(400).json({ message: val.message });
     }
 
-    const { rows: dup } = await db.query(
-      `SELECT id FROM dispatch_bins WHERE bin_number = $1 AND dispatch_id = $2`,
-      [parsed.binNumber, dispatchId]
-    );
-    if (dup.length > 0) {
-      logAudit({
-        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
-        product_code: parsed.productCode, result: 'FAIL',
-        operator_user_id: req.user.id,
-        error_message: 'Bin already scanned',
-        raw_qr: rawQr
-      }).catch(console.error);
-      return res.status(409).json({ message: 'Bin already scanned' });
-    }
-
+    // No redundant SELECT — rely on unique constraint (23505 catch below handles duplicates)
     await db.query('BEGIN');
     try {
       const { rows: binRow } = await db.query(
@@ -161,7 +147,21 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       await db.query('ROLLBACK');
       throw txErr;
     }
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === '23505') {
+      logAudit({
+        dispatchId, type: 'BIN_LABEL',
+        code: parsed?.binNumber || rawQr.substring(0, 50),
+        product_code: parsed?.productCode || null,
+        result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Bin already scanned',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(409).json({ message: 'Bin already scanned' });
+    }
+    next(err);
+  }
 });
 
 // POST /api/dispatch/:id/scan-part
@@ -226,16 +226,19 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
       const totalScanned  = parseInt(countRows[0].total_count);
       const expectedTotal = dispatch.total_schedule_bins * dispatch.ref_case_pack;
 
+      // Use RETURNING * to avoid a separate SELECT after commit
+      let finalDispatch;
       if (totalScanned >= expectedTotal) {
-        await db.query(
-          `UPDATE dispatches SET status = 'COMPLETED', updated_at=now() WHERE id = $1`,
+        const { rows } = await db.query(
+          `UPDATE dispatches SET status='COMPLETED', updated_at=now() WHERE id=$1 RETURNING *`,
           [dispatchId]
         );
+        finalDispatch = rows[0];
+      } else {
+        finalDispatch = dispatch;
       }
 
       await db.query('COMMIT');
-
-      const { rows: finalRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
 
       logAudit({
         dispatchId, type: 'PART', code: parsedPart.normalized.substring(0, 50),
@@ -246,7 +249,7 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
       res.json({
         count: binCount,
         partCode: parsedPart.normalized,
-        dispatch: finalRows[0]
+        dispatch: finalDispatch
       });
     } catch (txErr) {
       await db.query('ROLLBACK');
