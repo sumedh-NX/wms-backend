@@ -29,8 +29,7 @@ function parseUsuiBin(raw) {
     const invoiceMatch     = t.match(/D(\d{12})/);
     const vendorCodeMatch  = t.match(/U(\d{3})/);
     // \s* on both sides of the capture group — handles spaces/newlines before and after
-    const scheduleMatch = t.match(/U\d{3}\s*([0-9A-Z]+)\s*(?=PE-\d)/i);
-   // const scheduleMatch = t.match(/U\d{3}\s*([0-9A-Z]+)\s*(?=PE-\d)/i);
+    const scheduleMatch    = t.match(/U\d{3}\s*([0-9A-Z]+)\s*(?=PE-\d)/i);
     const nagareMatch      = t.match(/(\d{2}\/\d{2}\/\d{4}\s+\d{2}:\d{2}\s*[AP]M)(?=[^a-z])/);
 
     return {
