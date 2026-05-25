@@ -153,6 +153,22 @@ router.post('/strategies', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+router.put('/strategies/:id', async (req, res, next) => {
+  const { code, name, description, config, custom_js } = req.body;
+  try {
+    const configString = typeof config === 'object' ? JSON.stringify(config) : config;
+    const { rows } = await db.query(
+      `UPDATE validation_strategies SET code=$1, name=$2, description=$3, config=$4, custom_js=$5
+       WHERE id=$6 RETURNING *`,
+      [code, name, description, configString, custom_js, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Strategy not found' });
+    clearStrategyCache();
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
+
 /* -----------------------------------------------------------------
    STRATEGY ASSIGNMENT & CACHE MANAGEMENT
 ----------------------------------------------------------------- */
