@@ -5,7 +5,8 @@
  */
 const nitera = require('./nitera');
 const usui   = require('./usui');
+const nhk    = require('./nhk');
 
-const CUSTOMER_REGISTRY = [nitera, usui];
+const CUSTOMER_REGISTRY = [nitera, usui, nhk];
 
 module.exports = CUSTOMER_REGISTRY;
