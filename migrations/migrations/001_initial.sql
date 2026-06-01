@@ -101,7 +101,7 @@ CREATE TABLE audit_logs (
   id SERIAL PRIMARY KEY,
   dispatch_id INT REFERENCES dispatches(id) ON DELETE CASCADE,
   timestamp TIMESTAMPTZ DEFAULT now(),
-  type TEXT CHECK (type IN ('BIN_LABEL','PICKLIST')) NOT NULL,
+  type TEXT CHECK (type IN ('BIN_LABEL','PICKLIST','NX_QR','PART')) NOT NULL,
   code TEXT NOT NULL,               -- bin number or pick code
   product_code TEXT,
   result TEXT CHECK (result IN ('PASS','FAIL')) NOT NULL,
