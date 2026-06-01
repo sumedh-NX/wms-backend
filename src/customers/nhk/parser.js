@@ -53,48 +53,24 @@ function parseNhkBinLines(raw) {
 }
 
 // Flat path: scanner converts every \n → space, so the entire QR arrives as one string.
-// The label uses fixed-width columns; positions below are verified from the 227-char format.
+// Different label types have different field lengths (e.g. product name length varies),
+// so we use sequential token extraction anchored on the seqStr (X/Y) pattern rather
+// than hardcoded byte positions.
 //
-// Layout (0-indexed):
-//  0-12   bin number (13 digits)
-//  13-35  spaces  (line0 pad + blank line1 + separators)
-//  36-46  product code (11 chars, padded to match line width)
-//  47-51  spaces
-//  52-54  case pack
-//  55-60  spaces
-//  61-76  product name
-//  77     space
-//  78-90  bin number repeat
-//  91     space
-//  92-100 supply date
-//  101-103 spaces (trailing + 2 empty lines)
-//  104-113 invoice number
-//  114    space
-//  115-117 total supply qty
-//  118    space
-//  119-122 destination code
-//  123    space
-//  124-138 schedule number
-//  139    space
-//  140-144 unload location
-//  145    space
-//  146-148 bin sequence
-//  149    space
-//  150-170 vendor name
-//  171-175 spaces / dashes
-//  176-185 destination plant
-//  186-188 spaces / dash
-//  189-207 nagare time
-//  208    space
-//  209-212 model code
-//  213-217 spaces / dashes
-//  218-220 variant
+// Token structure (blank lines collapse to whitespace):
+//   [binNumber] ... [productCode] ... [casePack] ... [productName tokens] ...
+//   [binRepeat?] [supplyDate] [invoiceNumber] [totalSupplyQty] [destinationCode]
+//   [scheduleNumber] [unloadLocation] [seqStr X/Y] [vendorName tokens]
+//   [destinationPlant] [nagareTime] [modelCode] [variant]
+//
+// The bin number repeat may appear before or after supplyDate depending on label format;
+// we remove it from the middle segment before counting backwards to the fixed 6-token block.
 function parseNhkBinFlat(raw) {
   // bin number: always the first 13 digits
   const binNumber = raw.slice(0, 13);
   if (!/^\d{13}$/.test(binNumber)) return null;
 
-  // product code: first non-space token after bin number (separated by ~23 spaces)
+  // product code: first non-space token after bin number
   const afterBin = raw.slice(13);
   const pcm = afterBin.match(/^\s+(\S+)/);
   if (!pcm) return null;
@@ -107,24 +83,81 @@ function parseNhkBinFlat(raw) {
   const casePack = parseInt(cpm[1]);
   if (isNaN(casePack)) return null;
 
-  // remaining fields at fixed positions verified from the 227-char label format
-  const productName     = raw.slice(61, 77).trim()   || null;
-  const supplyDate      = raw.slice(92, 101).trim()  || null;
-  const invoiceNumber   = raw.slice(104, 114).trim() || null;
-  const totalSupplyQty  = parseInt(raw.slice(115, 118).trim()) || null;
-  const destinationCode = raw.slice(119, 123).trim() || null;
-  const scheduleNumber  = raw.slice(124, 139).trim() || null;
-  const unloadLocation  = raw.slice(140, 145).trim() || null;
+  // seqStr is X/Y (bin index / total bins). Use negative lookahead/lookbehind to
+  // avoid matching slashes inside date strings like "22/05/26" or "23/05/2026".
+  const seqM = raw.match(/(?<!\/)(\d+)\/(\d+)(?!\/)/);
+  if (!seqM) return null;
+  const totalBins = parseInt(seqM[2]);
 
-  const seqStr   = raw.slice(146, 149).trim() || '';
-  const seqMatch = seqStr.match(/^(\d+)\/(\d+)$/);
-  const totalBins = seqMatch ? parseInt(seqMatch[2]) : null;
+  // Middle segment: between end-of-casePack and start-of-seqStr.
+  // Remove the bin number repeat (same 13 digits) so it doesn't displace the count.
+  const cpEnd  = 13 + pcm[0].length + cpm[0].length;
+  const midSeg = raw.slice(cpEnd, seqM.index).replace(binNumber, ' ');
+  const midTokens = midSeg.trim().split(/\s+/).filter(t => t.length > 0);
 
-  const vendorName       = raw.slice(150, 171).trim() || null;
-  const destinationPlant = raw.slice(176, 186).trim() || null;
-  const nagareTime       = raw.slice(189, 208).trim() || null;
-  const modelCode        = raw.slice(209, 213).trim() || null;
-  const variant          = raw.slice(218, 221).trim() || null;
+  // The last 6 tokens before seqStr are always (in order):
+  //   supplyDate, invoiceNumber, totalSupplyQty, destinationCode, scheduleNumber, unloadLocation
+  // Everything before them reconstructs productName.
+  let productName = null, supplyDate = null, invoiceNumber = null;
+  let totalSupplyQty = null, destinationCode = null, scheduleNumber = null, unloadLocation = null;
+
+  if (midTokens.length >= 6) {
+    const pi = midTokens.length - 6;
+    productName     = midTokens.slice(0, pi).join(' ') || null;
+    supplyDate      = midTokens[pi]                    || null;
+    invoiceNumber   = midTokens[pi + 1]                || null;
+    totalSupplyQty  = parseInt(midTokens[pi + 2])      || null;
+    destinationCode = midTokens[pi + 3]                || null;
+    scheduleNumber  = midTokens[pi + 4]                || null;
+    unloadLocation  = midTokens[pi + 5]                || null;
+  }
+
+  // Tail segment: after seqStr.
+  // Use nagareTime as a pattern anchor because several fields are multi-token
+  // (e.g. "MSIL - GVP", "23/05/2026 12:30 PM") and label formats vary.
+  //   new format: DD/MM/YYYY HH:MM AM/PM
+  //   old format: YYMMDD-YYMMDD
+  const tailSeg = raw.slice(seqM.index + seqM[0].length);
+  const nagareRx = /(\d{2}\/\d{2}\/\d{4}\s+\d{1,2}:\d{2}\s+[AP]M|\d{6}-\d{6})/;
+  const nagareM  = nagareRx.exec(tailSeg);
+
+  let vendorName = null, destinationPlant = null, nagareTime = null;
+  let modelCode = null, variant = null;
+
+  if (nagareM) {
+    nagareTime = nagareM[1];
+
+    // After nagareTime: skip dash separators; first two non-dash tokens are modelCode, variant.
+    const afterNagare  = tailSeg.slice(nagareM.index + nagareM[0].length);
+    const afterTokens  = afterNagare.trim().split(/\s+/).filter(t => t !== '-' && t.length > 0);
+    modelCode = afterTokens[0] || null;
+    variant   = afterTokens[1] || null;
+
+    // Before nagareTime: trim trailing dash separator, then split at the double-dash gap
+    // that separates vendorName from destinationPlant (lines[16-17] = two blank/dash lines).
+    const beforeNagare        = tailSeg.slice(0, nagareM.index).replace(/\s+-\s*$/, '').trim();
+    const doubleDashSegments  = beforeNagare.split(/\s+-\s+-\s+/);
+    if (doubleDashSegments.length >= 2) {
+      vendorName       = doubleDashSegments[0].trim() || null;
+      destinationPlant = doubleDashSegments[doubleDashSegments.length - 1].trim() || null;
+    } else {
+      // Old format: no explicit dashes; destinationPlant is the last space-separated token
+      const seg = beforeNagare.split(/\s+/).filter(t => t !== '-' && t.length > 0);
+      destinationPlant = seg[seg.length - 1] || null;
+      vendorName       = seg.slice(0, -1).join(' ') || null;
+    }
+  } else {
+    // Fallback: filter out dash separators, count from the end
+    const tailTokens = tailSeg.trim().split(/\s+/).filter(t => t !== '-' && t.length > 0);
+    if (tailTokens.length >= 4) {
+      const ti = tailTokens.length - 4;
+      vendorName       = tailTokens.slice(0, ti).join(' ') || null;
+      destinationPlant = tailTokens[ti]     || null;
+      nagareTime       = tailTokens[ti + 1] || null;
+      modelCode        = tailTokens[ti + 2] || null;
+      variant          = tailTokens[ti + 3] || null;
+    }
+  }
 
   return {
     binNumber, productCode, casePack, productName, supplyDate,
