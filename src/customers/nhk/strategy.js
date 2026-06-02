@@ -22,7 +22,11 @@ module.exports = {
       return { ok: false, message: 'Invalid NX Kanban: Code is too short.' };
     }
 
-    return { ok: true, productCode: normalizeNhkCode(trimmed) };
+    // NX Kanban barcodes may carry a prefix like "NX01 41311M75T00".
+    // The actual product code is always the last whitespace-separated token.
+    const tokens = trimmed.split(/\s+/);
+    const productCode = tokens[tokens.length - 1];
+    return { ok: true, productCode: normalizeNhkCode(productCode) };
   },
 
   validateBin: (nxProductCode, parsedBin, dispatch) => {

@@ -93,7 +93,7 @@ function parseNhkBinFlat(raw) {
   // Remove the bin number repeat (same 13 digits) so it doesn't displace the count.
   const cpEnd  = 13 + pcm[0].length + cpm[0].length;
   const midSeg = raw.slice(cpEnd, seqM.index).replace(binNumber, ' ');
-  const midTokens = midSeg.trim().split(/\s+/).filter(t => t.length > 0);
+  const midTokens = midSeg.trim().split(/\s+/).filter(t => t !== '-' && t.length > 0);
 
   // The last 6 tokens before seqStr are always (in order):
   //   supplyDate, invoiceNumber, totalSupplyQty, destinationCode, scheduleNumber, unloadLocation
