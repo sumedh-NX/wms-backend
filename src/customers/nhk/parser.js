@@ -85,7 +85,7 @@ function parseNhkBinFlat(raw) {
 
   // seqStr is X/Y (bin index / total bins). Use negative lookahead/lookbehind to
   // avoid matching slashes inside date strings like "22/05/26" or "23/05/2026".
-  const seqM = raw.match(/(?<!\/)(\d+)\/(\d+)(?!\/)/);
+  const seqM = raw.match(/(?<![\/\d])(\d+)\/(\d+)(?![\/\d])/);
   if (!seqM) return null;
   const totalBins = parseInt(seqM[2]);
 
