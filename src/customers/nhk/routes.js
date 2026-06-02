@@ -82,20 +82,19 @@ router.post('/:id/scan-bin-nhk', permit('operator', 'supervisor', 'admin'), asyn
       return res.status(400).json({ message: val.message });
     }
 
-    const totalBins = parsed.totalBins || dispatch.total_schedule_bins || 1;
-
     await db.query('BEGIN');
     try {
       const { rows: binRow } = await db.query(
         `INSERT INTO dispatch_bins
          (dispatch_id, bin_number, product_code, case_pack, supply_quantity, supply_date, raw_qr)
          VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [dispatchId, parsed.binNumber, parsed.productCode, PARTS_PER_BIN,
+        [dispatchId, parsed.binNumber, parsed.productCode, parsed.casePack,
          parsed.totalSupplyQty, parsed.supplyDate, rawQr]
       );
 
       let finalRows;
       if (!dispatch.ref_case_pack) {
+        const totalBins = Math.ceil((parsed.totalSupplyQty || 1) / (parsed.casePack || 1));
         const result = await db.query(
           `UPDATE dispatches SET
            smg_qty            = smg_qty + 1,
@@ -107,11 +106,12 @@ router.post('/:id/scan-bin-nhk', permit('operator', 'supervisor', 'admin'), asyn
            supply_quantity     = $6,
            updated_at          = now()
            WHERE id = $7 RETURNING *`,
-          [totalBins, PARTS_PER_BIN, parsed.scheduleNumber,
+          [totalBins, parsed.casePack, parsed.scheduleNumber,
            parsed.nagareTime, parsed.supplyDate, parsed.totalSupplyQty, dispatchId]
         );
         finalRows = result.rows;
       } else {
+        const totalBins = Math.ceil((dispatch.supply_quantity || 1) / (dispatch.ref_case_pack || 1));
         const result = await db.query(
           `UPDATE dispatches SET
            smg_qty = smg_qty + 1,
