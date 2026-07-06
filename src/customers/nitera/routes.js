@@ -40,6 +40,32 @@ router.post('/:id/scan-bin', permit('operator', 'supervisor', 'admin'), async (r
       return res.status(400).json({ message: validationResult.message });
     }
 
+    // Validate against the customer's item master: the product must be a known
+    // item for this customer, and the label's case pack must match what the
+    // master says — catches misprinted / wrong labels before they're persisted.
+    const { rows: itemRows } = await db.query(
+      `SELECT * FROM customer_items WHERE customer_id = $1 AND item_code = $2`,
+      [dispatch.customer_id, parsed.productCode]
+    );
+    if (itemRows.length === 0) {
+      const message = `Item ${parsed.productCode} not found in customer item master`;
+      logAudit({
+        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
+        product_code: parsed.productCode, result: 'FAIL',
+        operator_user_id: req.user.id, error_message: message, raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message });
+    }
+    if (itemRows[0].case_pack !== parsed.casePack) {
+      const message = `Case pack mismatch: label says ${parsed.casePack}, master expects ${itemRows[0].case_pack}`;
+      logAudit({
+        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
+        product_code: parsed.productCode, result: 'FAIL',
+        operator_user_id: req.user.id, error_message: message, raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message });
+    }
+
     await db.query('BEGIN');
     try {
       if (!dispatch.ref_product_code) {

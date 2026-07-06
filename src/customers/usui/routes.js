@@ -7,6 +7,10 @@ const { resolveStrategyCode } = require('../../utils/strategyEngine');
 const { getStrategy } = require('../../strategies');
 const { logAudit } = require('../../utils/auditLogger');
 
+// ===============================================================================
+// USUI WORKFLOW: NX -> Bin -> Parts Validation
+// ===============================================================================
+
 // POST /api/dispatch/:id/scan-nx
 router.post('/:id/scan-nx', permit('operator', 'supervisor', 'admin'), async (req, res, next) => {
   const dispatchId = req.params.id;
@@ -75,7 +79,7 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
-    const strategyCode  = await resolveStrategyCode(dispatch.customer_id);
+    const strategyCode = await resolveStrategyCode(dispatch.customer_id);
     const strategyLogic = getStrategy(strategyCode);
 
     const val = strategyLogic.validateBin(dispatch.ref_product_code, parsed, dispatch);
@@ -88,7 +92,47 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       return res.status(400).json({ message: val.message });
     }
 
-    // No redundant SELECT — rely on unique constraint (23505 catch below handles duplicates)
+    // Validate against the customer's item master: the product must be a known
+    // item for this customer, and the label's case pack must match what the
+    // master says — catches misprinted / wrong labels before they're persisted.
+    const { rows: itemRows } = await db.query(
+      `SELECT * FROM customer_items WHERE customer_id = $1 AND item_code = $2`,
+      [dispatch.customer_id, parsed.productCode]
+    );
+    if (itemRows.length === 0) {
+      const message = `Item ${parsed.productCode} not found in customer item master`;
+      logAudit({
+        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
+        product_code: parsed.productCode, result: 'FAIL',
+        operator_user_id: req.user.id, error_message: message, raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message });
+    }
+    if (itemRows[0].case_pack !== parsed.insidePartCount) {
+      const message = `Case pack mismatch: label says ${parsed.insidePartCount}, master expects ${itemRows[0].case_pack}`;
+      logAudit({
+        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
+        product_code: parsed.productCode, result: 'FAIL',
+        operator_user_id: req.user.id, error_message: message, raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(400).json({ message });
+    }
+
+    const { rows: dup } = await db.query(
+      `SELECT id FROM dispatch_bins WHERE bin_number = $1 AND dispatch_id = $2`,
+      [parsed.binNumber, dispatchId]
+    );
+    if (dup.length > 0) {
+      logAudit({
+        dispatchId, type: 'BIN_LABEL', code: parsed.binNumber,
+        product_code: parsed.productCode, result: 'FAIL',
+        operator_user_id: req.user.id,
+        error_message: 'Bin already scanned',
+        raw_qr: rawQr
+      }).catch(console.error);
+      return res.status(409).json({ message: 'Bin already scanned' });
+    }
+
     await db.query('BEGIN');
     try {
       const { rows: binRow } = await db.query(
@@ -147,21 +191,7 @@ router.post('/:id/scan-bin-usui', permit('operator', 'supervisor', 'admin'), asy
       await db.query('ROLLBACK');
       throw txErr;
     }
-  } catch (err) {
-    if (err.code === '23505') {
-      logAudit({
-        dispatchId, type: 'BIN_LABEL',
-        code: parsed?.binNumber || rawQr.substring(0, 50),
-        product_code: parsed?.productCode || null,
-        result: 'FAIL',
-        operator_user_id: req.user.id,
-        error_message: 'Bin already scanned',
-        raw_qr: rawQr
-      }).catch(console.error);
-      return res.status(409).json({ message: 'Bin already scanned' });
-    }
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
 // POST /api/dispatch/:id/scan-part
@@ -189,7 +219,7 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
     if (dRows.length === 0) return res.status(404).json({ message: 'Dispatch not found' });
     const dispatch = dRows[0];
 
-    const strategyCode  = await resolveStrategyCode(dispatch.customer_id);
+    const strategyCode = await resolveStrategyCode(dispatch.customer_id);
     const strategyLogic = getStrategy(strategyCode);
 
     const val = await strategyLogic.validatePart(
@@ -222,23 +252,20 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
         [binId, dispatchId]
       );
 
-      const binCount      = parseInt(countRows[0].bin_count);
-      const totalScanned  = parseInt(countRows[0].total_count);
+      const binCount = parseInt(countRows[0].bin_count);
+      const totalScanned = parseInt(countRows[0].total_count);
       const expectedTotal = dispatch.total_schedule_bins * dispatch.ref_case_pack;
 
-      // Use RETURNING * to avoid a separate SELECT after commit
-      let finalDispatch;
       if (totalScanned >= expectedTotal) {
-        const { rows } = await db.query(
-          `UPDATE dispatches SET status='COMPLETED', updated_at=now() WHERE id=$1 RETURNING *`,
+        await db.query(
+          `UPDATE dispatches SET status = 'COMPLETED', updated_at=now() WHERE id = $1`,
           [dispatchId]
         );
-        finalDispatch = rows[0];
-      } else {
-        finalDispatch = dispatch;
       }
 
       await db.query('COMMIT');
+
+      const { rows: finalRows } = await db.query(`SELECT * FROM dispatches WHERE id=$1`, [dispatchId]);
 
       logAudit({
         dispatchId, type: 'PART', code: parsedPart.normalized.substring(0, 50),
@@ -249,7 +276,7 @@ router.post('/:id/scan-part', permit('operator', 'supervisor', 'admin'), async (
       res.json({
         count: binCount,
         partCode: parsedPart.normalized,
-        dispatch: finalDispatch
+        dispatch: finalRows[0]
       });
     } catch (txErr) {
       await db.query('ROLLBACK');

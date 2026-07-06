@@ -17,7 +17,7 @@ router.use(permit('admin'));
 router.get('/users', async (req, res, next) => {
   try {
     const query = `
-      SELECT u.*, 
+      SELECT u.*,
       ARRAY_AGG(c.name) as assigned_customers
       FROM users u
       LEFT JOIN user_customers uc ON u.id = uc.user_id
@@ -40,8 +40,8 @@ router.post('/users', async (req, res, next) => {
 
     const hash = await bcrypt.hash(password, 12);
 
-    await db.query('BEGIN'); 
-    
+    await db.query('BEGIN');
+
     const { rows: userRows } = await db.query(
       `INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id`,
       [email, hash, role]
@@ -54,10 +54,10 @@ router.post('/users', async (req, res, next) => {
       }
     }
 
-    await db.query('COMMIT'); 
+    await db.query('COMMIT');
     res.json({ message: 'User created successfully', userId });
   } catch (err) {
-    await db.query('ROLLBACK'); 
+    await db.query('ROLLBACK');
     next(err);
   }
 });
@@ -80,7 +80,7 @@ router.put('/users/:id', async (req, res, next) => {
     }
     updateQuery += ` WHERE id=$${params.length + 1}`;
     params.push(id);
-    
+
     await db.query(updateQuery, params);
 
     await db.query(`DELETE FROM user_customers WHERE user_id=$1`, [id]);
@@ -143,7 +143,7 @@ router.post('/strategies', async (req, res, next) => {
   const { code, name, description, config, custom_js } = req.body;
   try {
     const configString = typeof config === 'object' ? JSON.stringify(config) : config;
-    
+
     const { rows } = await db.query(
       `INSERT INTO validation_strategies (code, name, description, config, custom_js)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
@@ -181,7 +181,7 @@ router.post('/customer-strategy', async (req, res, next) => {
 
     // 1. Remove existing strategy for this customer
     await db.query(`DELETE FROM customer_strategies WHERE customer_id=$1`, [customerId]);
-    
+
     // 2. Insert new strategy link
     await db.query(
       `INSERT INTO customer_strategies (customer_id, strategy_id) VALUES ($1,$2)`,
@@ -219,10 +219,10 @@ router.get('/customer-strategies', async (req, res, next) => {
 router.delete('/customer-strategy/:customerId', async (req, res, next) => {
   try {
     await db.query(`DELETE FROM customer_strategies WHERE customer_id=$1`, [req.params.customerId]);
-    
+
     // Clear cache so they move back to "Strict Mode/No Strategy" immediately
     clearStrategyCache(req.params.customerId);
-    
+
     res.json({ message: 'Strategy unlinked from customer' });
   } catch (err) { next(err); }
 });
@@ -231,12 +231,72 @@ router.delete('/customer-strategy/:customerId', async (req, res, next) => {
 router.delete('/strategies/:id', async (req, res, next) => {
   try {
     await db.query(`DELETE FROM validation_strategies WHERE id=$1`, [req.params.id]);
-    
+
     // Since this strategy might have been assigned to multiple customers,
     // we clear the entire strategy cache to be safe.
-    clearStrategyCache(); 
-    
+    clearStrategyCache();
+
     res.json({ message: 'Strategy deleted successfully' });
+  } catch (err) { next(err); }
+});
+
+/* -----------------------------------------------------------------
+   4. CUSTOMER ITEM MASTER
+----------------------------------------------------------------- */
+
+// GET: List items for a customer
+router.get('/customers/:customerId/items', async (req, res, next) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM customer_items WHERE customer_id=$1 ORDER BY item_code ASC`,
+      [req.params.customerId]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+// POST: Create an item in a customer's item master
+router.post('/customers/:customerId/items', async (req, res, next) => {
+  const { item_code, item_name, case_pack } = req.body;
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO customer_items (customer_id, item_code, item_name, case_pack)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [req.params.customerId, item_code, item_name, case_pack]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ message: 'This item code already exists for this customer' });
+    }
+    next(err);
+  }
+});
+
+// PUT: Update an item
+router.put('/items/:id', async (req, res, next) => {
+  const { item_code, item_name, case_pack } = req.body;
+  try {
+    const { rows } = await db.query(
+      `UPDATE customer_items SET item_code=$1, item_name=$2, case_pack=$3, updated_at=now()
+       WHERE id=$4 RETURNING *`,
+      [item_code, item_name, case_pack, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ message: 'Item not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ message: 'This item code already exists for this customer' });
+    }
+    next(err);
+  }
+});
+
+// DELETE: Remove an item
+router.delete('/items/:id', async (req, res, next) => {
+  try {
+    await db.query(`DELETE FROM customer_items WHERE id=$1`, [req.params.id]);
+    res.json({ message: 'Item deleted' });
   } catch (err) { next(err); }
 });
 
